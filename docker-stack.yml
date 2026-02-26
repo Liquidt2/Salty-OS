@@ -11,27 +11,12 @@ services:
 
   # ─────────────────────────────────
   # NGINX PROXY MANAGER
-  # Handles SSL + subdomain routing
+  # Already running standalone — connect with:
+  # docker network connect agent-network proxy_manager
+  # Admin UI: http://your-vps-ip:81
   # ─────────────────────────────────
 
-  proxy_manager:
-    image: jc21/nginx-proxy-manager:latest
-    container_name: proxy_manager
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "81:81"         # Admin UI
-    volumes:
-      - npm-data:/data
-      - npm-letsencrypt:/etc/letsencrypt
-    networks:
-      - agent-network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:81/api/"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
+  # ─────────────────────────────────
 
   # ─────────────────────────────────
   # DATABASES
@@ -266,10 +251,6 @@ services:
 # ─────────────────────────────────
 
 volumes:
-  npm-data:
-    name: npm-data
-  npm-letsencrypt:
-    name: npm-letsencrypt
   postgres-data:
     name: bke-postgres-data
   redis-data:
