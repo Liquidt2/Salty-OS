@@ -213,7 +213,7 @@ services:
     ports:
       - "7233:7233"
     environment:
-      DB: postgresql
+      DB: postgres12
       DB_PORT: 5432
       POSTGRES_USER: postgres
       POSTGRES_PWD: ${PG_ADMIN_PASSWORD:-bke_master_2025}
