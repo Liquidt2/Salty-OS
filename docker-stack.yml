@@ -237,26 +237,9 @@ services:
       - agent-network
 
   # ─────────────────────────────────
-  # FIRECRAWL — Web Scraping
-  # Internal only
+  # FIRECRAWL — Web Scraping (add later from self-hosted guide)
+  # https://github.com/mendableai/firecrawl/tree/main/docker
   # ─────────────────────────────────
-
-  firecrawl-api:
-    image: mendableai/firecrawl:latest
-    container_name: firecrawl-api
-    restart: unless-stopped
-    ports:
-      - "3002:3002"
-    environment:
-      REDIS_URL: redis://redis:6379
-      PORT: 3002
-      NUM_WORKERS_PER_QUEUE: 2
-      TZ: America/Chicago
-    depends_on:
-      redis:
-        condition: service_healthy
-    networks:
-      - agent-network
 
   # ─────────────────────────────────
   # STIRLING PDF — PDF Tools
