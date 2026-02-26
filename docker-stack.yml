@@ -194,14 +194,59 @@ services:
       NEXT_PUBLIC_BACKEND_URL: https://postiz.bkelogistics.com/api
       BACKEND_INTERNAL_URL: http://localhost:3100
       FRONTEND_URL: https://postiz.bkelogistics.com
+      TEMPORAL_URL: temporal:7233
       TZ: America/Chicago
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      temporal:
+        condition: service_started
     networks:
       - agent-network
+
+  temporal:
+    image: temporalio/auto-setup:latest
+    container_name: temporal
+    restart: unless-stopped
+    ports:
+      - "7233:7233"
+    environment:
+      DB: postgresql
+      DB_PORT: 5432
+      POSTGRES_USER: postgres
+      POSTGRES_PWD: ${PG_ADMIN_PASSWORD:-bke_master_2025}
+      POSTGRES_SEEDS: postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+      ENABLE_ES: true
+      ES_SEEDS: temporal-elasticsearch
+      ES_VERSION: v7
+    depends_on:
+      postgres:
+        condition: service_healthy
+      temporal-elasticsearch:
+        condition: service_healthy
+    networks:
+      - agent-network
+
+  temporal-elasticsearch:
+    image: elasticsearch:7.17.27
+    container_name: temporal-elasticsearch
+    restart: unless-stopped
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+    volumes:
+      - temporal-es-data:/usr/share/elasticsearch/data
+    networks:
+      - agent-network
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:9200/_cluster/health || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
 
   # ─────────────────────────────────
   # GOTENBERG — PDF Generation
@@ -267,6 +312,8 @@ volumes:
     name: n8n-data
   stirling-data:
     name: stirling-data
+  temporal-es-data:
+    name: temporal-es-data
 
 # ─────────────────────────────────
 # NETWORK
