@@ -1,142 +1,128 @@
-# 🧂 Salty OS — Source of Truth Dashboard
+# 🧂 Salty OS
 
 **BKE Logistics × Agent Zero Command Center**
 
-Salty OS is the unified operations dashboard for managing AI agents, tasks, deliverables, and workflows. Built as a single-page React app served via Docker/Nginx, it integrates with Agent Zero, n8n, and the full BKE automation stack.
-
-![Version](https://img.shields.io/badge/version-2.0.0-00E5FF)
-![Docker](https://img.shields.io/badge/docker-ready-blue)
+A unified operations dashboard for managing AI agents, tasks, projects, and business operations.
 
 ---
 
-## 🚀 Quick Start (VPS Deploy)
+## Features
+
+- **Dashboard** — Real-time command center with stats and quick links
+- **Kanban Board** — Drag-and-drop task management across 5 stages
+- **Task Scheduler** — Cron-based automation matching Agent Zero's schema
+- **Agent Management** — 9 AI agents with role docs and status tracking
+- **Deliverables** — Gallery view for all generated assets
+- **Activity Logs** — Color-coded feed with agent attribution
+- **Org Chart** — Visual hierarchy of agent structure
+- **Settings** — Backup/restore, GitHub updates, API connections
+
+---
+
+## Quick Start (VPS Deploy)
 
 ### Prerequisites
 - Docker & Docker Compose installed
 - `agent-network` Docker network exists
 
 ```bash
-# Create the shared network (if not already)
+# Create shared network (if not already)
 docker network create agent-network
 ```
 
 ### Install
 
 ```bash
-# 1. Clone the repo
 git clone https://github.com/Liquidt2/Salty-OS.git
 cd Salty-OS
-
-# 2. Copy environment config
 cp .env.example .env
-
-# 3. Build and launch
-docker-compose up -d --build
-
-# 4. Open dashboard
-# http://your-server-ip:3456
+docker compose up -d --build
 ```
 
-That's it. One command deploy.
+Dashboard: `http://your-server-ip:3000`
 
----
+### Development Mode
 
-## 📁 Project Structure
-
-```
-Salty-OS/
-├── docker-compose.yml      # One-command deploy
-├── Dockerfile              # Multi-stage build (Node → Nginx)
-├── nginx.conf              # SPA routing + health check
-├── vite.config.js          # Vite bundler config
-├── package.json            # Dependencies
-├── .env.example            # Config template
-├── index.html              # HTML shell
-├── src/
-│   ├── main.jsx            # React entry point
-│   └── App.jsx             # Full dashboard (all pages)
-├── scripts/
-│   ├── update.sh           # Safe update from GitHub
-│   ├── backup.sh           # Export data backup
-│   └── restore.sh          # Restore from backup
-└── data/                   # Persistent storage (Docker volume)
+```bash
+npm install
+npm run dev
 ```
 
 ---
 
-## 📊 Dashboard Pages
-
-| Page | Description |
-|------|-------------|
-| **Dashboard** | Command center — stats, Kanban overview, quick links |
-| **Kanban** | Drag-and-drop task board with 5 columns |
-| **Task Scheduler** | Cron management matching Agent Zero's schema |
-| **Agents** | 9-agent grid with editable docs |
-| **Deliverables** | Gallery view for files and outputs |
-| **Activity Logs** | Color-coded feed with agent attribution |
-| **Org Chart** | Visual hierarchy of the AI team |
-| **Settings** | Config, backup/restore, GitHub updates |
-
----
-
-## 🔄 Safe Updates
-
-Pull the latest code without losing any data:
+## Updating (Safe — Zero Data Loss)
 
 ```bash
 ./scripts/update.sh
 ```
 
-**What happens:**
-1. Auto-backup current data
-2. `git pull` latest code
-3. Rebuild container (data volume untouched)
-4. Restart dashboard
+**How it works:**
+1. Creates pre-update backup in `./backups/`
+2. Pulls latest code from GitHub
+3. Rebuilds Docker container (code only)
+4. Restarts with new code
+5. Health check — auto-rollback if failed
 
-Your data lives in a Docker volume (`salty-os-data`) — completely separate from code. Updates only replace UI/code files.
+Your data lives in a Docker volume (`salty-os-data`) that is **never touched** during updates.
 
 ---
 
-## 💾 Backup & Restore
+## Backup & Restore
 
-### Create backup
 ```bash
+# Create backup
 ./scripts/backup.sh
+
+# Restore
+./scripts/restore.sh ./backups/salty-os-backup-20250226_120000.json
 ```
 
-### Restore from backup
-```bash
-./scripts/restore.sh backups/salty-os-backup_20260226.tar.gz
-```
-
-### In-app backup
-Settings → Backup & Restore → Create Backup (downloads JSON)
+Also available in the Settings page UI.
 
 ---
 
-## 🌐 Network Integration
+## Project Structure
 
-Salty OS runs on the `agent-network` Docker network alongside:
-
-| Service | Internal URL | Port |
-|---------|-------------|------|
-| Salty OS | `salty-os:3456` | 3456 |
-| Agent Zero | `agent-zero:8000` | 8000 |
-| n8n | `n8n:5678` | 5678 |
-
----
-
-## 🛠 Development
-
-```bash
-# Local dev with hot reload
-npm install
-npm run dev
-# → http://localhost:3000
+```
+Salty-OS/
+├── docker-compose.yml      # One-command deploy
+├── Dockerfile              # Multi-stage production build
+├── .env.example            # Config template
+├── package.json            # Dependencies
+├── vite.config.js          # Build config
+├── index.html              # HTML shell
+├── src/
+│   ├── App.jsx             # Main dashboard (all pages)
+│   └── main.jsx            # React entry point
+├── scripts/
+│   ├── backup.sh           # Create data backup
+│   ├── update.sh           # Safe GitHub update
+│   └── restore.sh          # Restore from backup
+├── data/                   # Docker volume mount
+├── backups/                # Backup files (local)
+└── README.md
 ```
 
 ---
 
-## 📜 License
+## Network Integration
 
-Private — BKE Logistics LLC. All rights reserved.
+| Service | Port | Purpose |
+|---------|------|---------|
+| Agent Zero | :80 | AI agent framework |
+| n8n | :5678 | Workflow automation |
+| Postiz | :5000 | Social media scheduling |
+| Gotenberg | :3100 | PDF generation |
+
+---
+
+## Tech Stack
+
+- **Frontend:** React 18 + Vite
+- **Styling:** CSS-in-JS (zero dependencies)
+- **Container:** Docker + Alpine Node
+- **Theme:** Electric Cyan glassmorphism on dark
+
+---
+
+*Built for BKE Logistics LLC*
