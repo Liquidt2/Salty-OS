@@ -117,7 +117,7 @@ services:
   # ─────────────────────────────────
 
   agent-zero:
-    image: frdel/agent-zero-run:latest
+    image: agent0ai/agent-zero:latest
     container_name: agent-zero
     restart: unless-stopped
     ports:
