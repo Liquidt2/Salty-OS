@@ -1,0 +1,285 @@
+# ═══════════════════════════════════════════════════════════════
+# BKE LOGISTICS — Master Docker Stack
+# All services on one network, one PostgreSQL, one Redis
+#
+# Deploy: docker compose -f docker-stack.yml up -d --build
+# ═══════════════════════════════════════════════════════════════
+
+services:
+
+  # ─────────────────────────────────
+  # DATABASES
+  # ─────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${PG_ADMIN_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_ADMIN_PASSWORD:-bke_master_2025}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432"
+    networks:
+      - agent-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis-data:/data
+    ports:
+      - "6379:6379"
+    networks:
+      - agent-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─────────────────────────────────
+  # SALTY OS — Command Center
+  # ops.bkelogistics.com
+  # ─────────────────────────────────
+
+  salty-os:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: salty-os
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      salty-api:
+        condition: service_healthy
+    networks:
+      - agent-network
+
+  salty-api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: salty-api
+    restart: unless-stopped
+    ports:
+      - "3001:3001"
+    environment:
+      API_PORT: 3001
+      DB_HOST: postgres
+      DB_PORT: 5432
+      DB_NAME: saltyos
+      DB_USER: salty
+      DB_PASSWORD: saltyos_secret
+      SALTY_AUTH_TOKEN: ${SALTY_AUTH_TOKEN:-}
+      AGENT_ZERO_URL: http://agent-zero:80
+      N8N_URL: http://n8n:5678
+      POSTIZ_URL: http://postiz:5000
+      GOTENBERG_URL: http://gotenberg:3100
+      FIRECRAWL_URL: http://firecrawl:3002
+      STIRLING_URL: http://stirling-pdf:8080
+      TZ: America/Chicago
+    volumes:
+      - salty-data:/app/data
+      - salty-backups:/app/backups
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - agent-network
+
+  # ─────────────────────────────────
+  # AGENT ZERO — AI Agent Framework
+  # klaus.bkelogistics.com
+  # ─────────────────────────────────
+
+  agent-zero:
+    image: frdel/agent-zero-run:latest
+    container_name: agent-zero
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    environment:
+      # LLM Config — update with your preferred model/keys
+      CHAT_MODEL_PROVIDER: ${AZ_CHAT_PROVIDER:-openai}
+      CHAT_MODEL_NAME: ${AZ_CHAT_MODEL:-gpt-4o}
+      CHAT_API_KEY: ${AZ_CHAT_API_KEY:-}
+      UTILITY_MODEL_PROVIDER: ${AZ_UTIL_PROVIDER:-openai}
+      UTILITY_MODEL_NAME: ${AZ_UTIL_MODEL:-gpt-4o-mini}
+      UTILITY_API_KEY: ${AZ_UTIL_API_KEY:-}
+      EMBEDDING_MODEL_PROVIDER: ${AZ_EMBED_PROVIDER:-openai}
+      EMBEDDING_MODEL_NAME: ${AZ_EMBED_MODEL:-text-embedding-3-small}
+      EMBEDDING_API_KEY: ${AZ_EMBED_API_KEY:-}
+      TZ: America/Chicago
+    volumes:
+      - agent-zero-data:/a0/work_dir
+      - agent-zero-memory:/a0/memory
+      - /var/run/docker.sock:/var/run/docker.sock
+    networks:
+      - agent-network
+
+  # ─────────────────────────────────
+  # N8N — Workflow Automation
+  # n8n.bkelogistics.com
+  # ─────────────────────────────────
+
+  n8n:
+    image: n8nio/n8n:latest
+    container_name: n8n
+    restart: unless-stopped
+    ports:
+      - "5678:5678"
+    environment:
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: postgres
+      DB_POSTGRESDB_PORT: 5432
+      DB_POSTGRESDB_DATABASE: n8n
+      DB_POSTGRESDB_USER: n8n_user
+      DB_POSTGRESDB_PASSWORD: n8n_secret
+      EXECUTIONS_MODE: queue
+      QUEUE_BULL_REDIS_HOST: redis
+      QUEUE_BULL_REDIS_PORT: 6379
+      N8N_ENCRYPTION_KEY: ${N8N_ENCRYPTION_KEY:-change-this-to-a-random-string}
+      WEBHOOK_URL: https://n8n.bkelogistics.com/
+      GENERIC_TIMEZONE: America/Chicago
+      TZ: America/Chicago
+    volumes:
+      - n8n-data:/home/node/.n8n
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - agent-network
+
+  # ─────────────────────────────────
+  # POSTIZ — Social Media Scheduling
+  # postiz.bkelogistics.com
+  # ─────────────────────────────────
+
+  postiz:
+    image: ghcr.io/gitroomhq/postiz-app:latest
+    container_name: postiz
+    restart: unless-stopped
+    ports:
+      - "5000:5000"
+      - "3100:3100"
+    environment:
+      DATABASE_URL: postgresql://postiz_user:postiz_secret@postgres:5432/postiz
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${POSTIZ_JWT_SECRET:-change-this-postiz-secret}
+      NEXT_PUBLIC_BACKEND_URL: https://postiz.bkelogistics.com/api
+      BACKEND_INTERNAL_URL: http://localhost:3100
+      FRONTEND_URL: https://postiz.bkelogistics.com
+      TZ: America/Chicago
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - agent-network
+
+  # ─────────────────────────────────
+  # GOTENBERG — PDF Generation
+  # (internal only, no subdomain needed)
+  # ─────────────────────────────────
+
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    container_name: gotenberg
+    restart: unless-stopped
+    ports:
+      - "3200:3000"
+    command:
+      - "gotenberg"
+      - "--api-timeout=120s"
+      - "--chromium-disable-javascript=false"
+    networks:
+      - agent-network
+
+  # ─────────────────────────────────
+  # FIRECRAWL — Web Scraping
+  # (internal only)
+  # ─────────────────────────────────
+
+  firecrawl:
+    image: mendableai/firecrawl:latest
+    container_name: firecrawl
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      REDIS_URL: redis://redis:6379
+      PORT: 3002
+      NUM_WORKERS_PER_QUEUE: 2
+      TZ: America/Chicago
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - agent-network
+
+  # ─────────────────────────────────
+  # STIRLING PDF — PDF Tools
+  # pdf.bkelogistics.com
+  # ─────────────────────────────────
+
+  stirling-pdf:
+    image: stirlingtools/stirling-pdf:latest
+    container_name: stirling-pdf
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      DOCKER_ENABLE_SECURITY: "false"
+      LANGS: "en_US"
+      TZ: America/Chicago
+    volumes:
+      - stirling-data:/usr/share/tessdata
+    networks:
+      - agent-network
+
+# ─────────────────────────────────
+# VOLUMES — Persistent Data
+# ─────────────────────────────────
+
+volumes:
+  postgres-data:
+    name: bke-postgres-data
+  redis-data:
+    name: bke-redis-data
+  salty-data:
+    name: salty-os-data
+  salty-backups:
+    name: salty-os-backups
+  agent-zero-data:
+    name: agent-zero-data
+  agent-zero-memory:
+    name: agent-zero-memory
+  n8n-data:
+    name: n8n-data
+  stirling-data:
+    name: stirling-data
+
+# ─────────────────────────────────
+# NETWORK — Shared
+# ─────────────────────────────────
+
+networks:
+  agent-network:
+    name: agent-network
+    driver: bridge

@@ -1,32 +1,63 @@
 # ═══════════════════════════════════════════
-# Salty OS — Docker Compose
-# One-command deploy: docker compose up -d --build
+# Salty OS — Frontend + Backend
+# Deploy: docker compose up -d --build
 # ═══════════════════════════════════════════
 
 services:
+  # React Frontend
   salty-os:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     container_name: salty-os
     restart: unless-stopped
     ports:
       - "${SALTY_PORT:-3000}:3000"
-    volumes:
-      # Persistent data — survives rebuilds and updates
-      - salty-data:/app/data
-      # Backup directory on host for easy access
-      - ./backups:/app/backups
-    environment:
-      - NODE_ENV=production
-      - TZ=${TZ:-America/Chicago}
+    depends_on:
+      salty-api:
+        condition: service_healthy
     networks:
       - agent-network
     labels:
-      - "com.salty-os.description=BKE Logistics Command Center"
-      - "com.salty-os.version=1.0.0"
+      - "com.salty-os.service=frontend"
+
+  # Express API Backend
+  salty-api:
+    build:
+      context: ./server
+      dockerfile: Dockerfile
+    container_name: salty-api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-3001}:3001"
+    environment:
+      - API_PORT=3001
+      - DB_HOST=${DB_HOST:-postgres}
+      - DB_PORT=${DB_PORT:-5432}
+      - DB_NAME=${DB_NAME:-saltyos}
+      - DB_USER=${DB_USER:-salty}
+      - DB_PASSWORD=${DB_PASSWORD:-saltyos_secret}
+      - SALTY_AUTH_TOKEN=${SALTY_AUTH_TOKEN:-}
+      - AGENT_ZERO_URL=http://agent-zero:80
+      - N8N_URL=http://n8n:5678
+      - POSTIZ_URL=http://postiz:5000
+      - GOTENBERG_URL=http://gotenberg:3100
+      - FIRECRAWL_URL=http://firecrawl:3002
+      - STIRLING_URL=http://stirling-pdf:8080
+      - TZ=${TZ:-America/Chicago}
+    volumes:
+      - salty-data:/app/data
+      - salty-backups:/app/backups
+    networks:
+      - agent-network
+    labels:
+      - "com.salty-os.service=api"
 
 volumes:
   salty-data:
     name: salty-os-data
+  salty-backups:
+    name: salty-os-backups
 
 networks:
   agent-network:

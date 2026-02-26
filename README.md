@@ -2,126 +2,149 @@
 
 **BKE Logistics × Agent Zero Command Center**
 
-A unified operations dashboard for managing AI agents, tasks, projects, and business operations.
+Unified operations dashboard + full backend infrastructure for managing AI agents, tasks, and business operations.
 
 ---
 
-## Features
+## Architecture
 
-- **Dashboard** — Real-time command center with stats and quick links
-- **Kanban Board** — Drag-and-drop task management across 5 stages
-- **Task Scheduler** — Cron-based automation matching Agent Zero's schema
-- **Agent Management** — 9 AI agents with role docs and status tracking
-- **Deliverables** — Gallery view for all generated assets
-- **Activity Logs** — Color-coded feed with agent attribution
-- **Org Chart** — Visual hierarchy of agent structure
-- **Settings** — Backup/restore, GitHub updates, API connections
-
----
-
-## Quick Start (VPS Deploy)
-
-### Prerequisites
-- Docker & Docker Compose installed
-- `agent-network` Docker network exists
-
-```bash
-# Create shared network (if not already)
-docker network create agent-network
+```
+┌─────────────────────────────────────────────────────────────┐
+│  ops.bkelogistics.com     │  klaus.bkelogistics.com         │
+│  ┌──────────┐  ┌────────┐ │  ┌─────────────┐               │
+│  │ Salty OS  │→ │Salty   │ │  │ Agent Zero  │               │
+│  │ Frontend  │  │API     │ │  │             │               │
+│  │ :3000     │  │:3001   │ │  │ :80         │               │
+│  └──────────┘  └───┬────┘ │  └─────────────┘               │
+│                    │       │                                 │
+│  n8n.bkelogistics.com      │  postiz.bkelogistics.com       │
+│  ┌──────────┐              │  ┌──────────┐                  │
+│  │ n8n      │              │  │ Postiz   │                  │
+│  │ :5678    │              │  │ :5000    │                  │
+│  └────┬─────┘              │  └────┬─────┘                  │
+│       │                    │       │                         │
+│  ┌────┴────────────────────┴───────┴─────┐                  │
+│  │         PostgreSQL :5432              │                  │
+│  │  saltyos │ n8n │ postiz │ agent_zero  │                  │
+│  └────────────────────────────────────────┘                  │
+│  ┌────────────────┐                                          │
+│  │  Redis :6379   │  (Postiz, n8n queue, Firecrawl)         │
+│  └────────────────┘                                          │
+│                                                              │
+│  Internal services (no subdomain):                           │
+│  Gotenberg :3200  │  Firecrawl :3002  │  Stirling :8080     │
+└─────────────────────────────────────────────────────────────┘
+                    agent-network (Docker bridge)
 ```
 
-### Install
+---
+
+## Quick Start — Full Stack
 
 ```bash
 git clone https://github.com/Liquidt2/Salty-OS.git
 cd Salty-OS
 cp .env.example .env
-docker compose up -d --build
+# Edit .env with your API keys
+
+# Deploy everything
+docker compose -f docker-stack.yml up -d --build
 ```
 
-Dashboard: `http://your-server-ip:3000`
-
-### Development Mode
+### Salty OS Only (connects to existing services)
 
 ```bash
-npm install
-npm run dev
+docker compose up -d --build
 ```
 
 ---
 
-## Updating (Safe — Zero Data Loss)
+## Subdomains → Nginx Proxy Manager
+
+| Subdomain | Container | Port |
+|-----------|-----------|------|
+| ops.bkelogistics.com | salty-os | 3000 |
+| klaus.bkelogistics.com | agent-zero | 80 |
+| n8n.bkelogistics.com | n8n | 5678 |
+| postiz.bkelogistics.com | postiz | 5000 |
+| pdf.bkelogistics.com | stirling-pdf | 8080 |
+
+In Hostinger's Nginx Proxy Manager, create a proxy host for each:
+- **Domain:** `ops.bkelogistics.com`
+- **Forward:** `salty-os:3000` (or `localhost:3000`)
+- **SSL:** Request new Let's Encrypt cert
+
+---
+
+## Safe Updates
 
 ```bash
 ./scripts/update.sh
+# Auto-backup → git pull → rebuild → restart → rollback if failed
 ```
 
-**How it works:**
-1. Creates pre-update backup in `./backups/`
-2. Pulls latest code from GitHub
-3. Rebuilds Docker container (code only)
-4. Restarts with new code
-5. Health check — auto-rollback if failed
-
-Your data lives in a Docker volume (`salty-os-data`) that is **never touched** during updates.
+Data lives in Docker volumes — never touched during code updates.
 
 ---
 
 ## Backup & Restore
 
 ```bash
-# Create backup
-./scripts/backup.sh
-
-# Restore
-./scripts/restore.sh ./backups/salty-os-backup-20250226_120000.json
+./scripts/backup.sh                    # Create backup
+./scripts/restore.sh ./backups/xxx.json # Restore
 ```
 
 Also available in the Settings page UI.
 
 ---
 
-## Project Structure
+## File Structure
 
 ```
 Salty-OS/
-├── docker-compose.yml      # One-command deploy
-├── Dockerfile              # Multi-stage production build
+├── docker-stack.yml        # Full stack (all services)
+├── docker-compose.yml      # Salty OS only
+├── Dockerfile              # Frontend (Nginx + React)
+├── nginx.conf              # Frontend proxy config
 ├── .env.example            # Config template
-├── package.json            # Dependencies
+├── package.json            # Frontend dependencies
 ├── vite.config.js          # Build config
 ├── index.html              # HTML shell
 ├── src/
-│   ├── App.jsx             # Main dashboard (all pages)
-│   └── main.jsx            # React entry point
+│   ├── App.jsx             # Dashboard (all 8 pages)
+│   └── main.jsx            # React entry
+├── server/
+│   ├── index.js            # Express API server
+│   ├── package.json        # Backend dependencies
+│   └── Dockerfile          # Backend container
+├── db/
+│   └── init.sql            # PostgreSQL init (creates all DBs)
 ├── scripts/
-│   ├── backup.sh           # Create data backup
-│   ├── update.sh           # Safe GitHub update
-│   └── restore.sh          # Restore from backup
-├── data/                   # Docker volume mount
-├── backups/                # Backup files (local)
+│   ├── backup.sh
+│   ├── update.sh
+│   └── restore.sh
 └── README.md
 ```
 
 ---
 
-## Network Integration
+## API Endpoints
 
-| Service | Port | Purpose |
-|---------|------|---------|
-| Agent Zero | :80 | AI agent framework |
-| n8n | :5678 | Workflow automation |
-| Postiz | :5000 | Social media scheduling |
-| Gotenberg | :3100 | PDF generation |
-
----
-
-## Tech Stack
-
-- **Frontend:** React 18 + Vite
-- **Styling:** CSS-in-JS (zero dependencies)
-- **Container:** Docker + Alpine Node
-- **Theme:** Electric Cyan glassmorphism on dark
+| Method | Endpoint | Purpose |
+|--------|----------|---------|
+| GET | /api/health | Health check |
+| GET/POST | /api/kanban | Kanban tasks |
+| POST | /api/kanban/sync | Bulk board sync |
+| GET/POST | /api/crons | Scheduled tasks |
+| GET/POST | /api/agents | Agent configs |
+| GET/POST | /api/activity | Activity logs |
+| GET | /api/deliverables | Files & assets |
+| GET/POST | /api/settings | Key-value settings |
+| POST | /api/backup | Create backup |
+| POST | /api/restore | Restore from backup |
+| GET | /api/services | Service status check |
+| ALL | /api/proxy/agent-zero/* | Agent Zero proxy |
+| ALL | /api/proxy/n8n/* | n8n proxy |
 
 ---
 

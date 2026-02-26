@@ -1,0 +1,741 @@
+// ═══════════════════════════════════════════
+// SALTY OS — Backend API Server
+// Express.js + PostgreSQL
+// ═══════════════════════════════════════════
+
+import express from 'express';
+import pg from 'pg';
+import cors from 'cors';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
+import { join } from 'path';
+import { execSync } from 'child_process';
+import crypto from 'crypto';
+
+const { Pool } = pg;
+const app = express();
+const PORT = process.env.API_PORT || 3001;
+
+// ─── Middleware ───
+app.use(cors());
+app.use(express.json({ limit: '50mb' }));
+
+// Auth middleware — simple token gate
+const AUTH_TOKEN = process.env.SALTY_AUTH_TOKEN || '';
+const authMiddleware = (req, res, next) => {
+  if (!AUTH_TOKEN) return next(); // No token set = open (dev mode)
+  const token = req.headers['x-auth-token'] || req.query.token;
+  if (token === AUTH_TOKEN) return next();
+  res.status(401).json({ error: 'Unauthorized' });
+};
+app.use('/api', authMiddleware);
+
+// ─── PostgreSQL Connection ───
+const pool = new Pool({
+  host: process.env.DB_HOST || 'postgres',
+  port: parseInt(process.env.DB_PORT || '5432'),
+  database: process.env.DB_NAME || 'saltyos',
+  user: process.env.DB_USER || 'salty',
+  password: process.env.DB_PASSWORD || 'saltyos_secret',
+});
+
+// Retry connection with backoff
+async function connectWithRetry(retries = 10, delay = 3000) {
+  for (let i = 0; i < retries; i++) {
+    try {
+      const client = await pool.connect();
+      console.log('✅ PostgreSQL connected');
+      client.release();
+      return true;
+    } catch (err) {
+      console.log(`⏳ Waiting for PostgreSQL... (${i + 1}/${retries})`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
+  console.error('❌ Could not connect to PostgreSQL');
+  return false;
+}
+
+// ─── Database Schema ───
+async function initDatabase() {
+  const client = await pool.connect();
+  try {
+    await client.query(`
+      -- Kanban tasks
+      CREATE TABLE IF NOT EXISTS kanban_tasks (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        description TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'todo',
+        priority TEXT DEFAULT 'medium',
+        agent TEXT DEFAULT '',
+        tags TEXT[] DEFAULT '{}',
+        due_date TEXT DEFAULT '',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Scheduled tasks (crons)
+      CREATE TABLE IF NOT EXISTS cron_tasks (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'scheduled',
+        project TEXT DEFAULT 'No project',
+        state TEXT NOT NULL DEFAULT 'idle',
+        minute TEXT DEFAULT '*',
+        hour TEXT DEFAULT '*',
+        day TEXT DEFAULT '*',
+        month TEXT DEFAULT '*',
+        weekday TEXT DEFAULT '*',
+        agent TEXT DEFAULT '',
+        description TEXT DEFAULT '',
+        enabled BOOLEAN DEFAULT true,
+        last_run TIMESTAMPTZ,
+        next_run TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Agent configs
+      CREATE TABLE IF NOT EXISTS agents (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        role TEXT DEFAULT '',
+        department TEXT DEFAULT '',
+        status TEXT DEFAULT 'idle',
+        avatar TEXT DEFAULT '',
+        color TEXT DEFAULT '#00E5FF',
+        doc TEXT DEFAULT '',
+        config JSONB DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Activity logs
+      CREATE TABLE IF NOT EXISTS activity_logs (
+        id SERIAL PRIMARY KEY,
+        agent TEXT DEFAULT 'system',
+        action TEXT NOT NULL,
+        detail TEXT DEFAULT '',
+        category TEXT DEFAULT 'system',
+        severity TEXT DEFAULT 'info',
+        metadata JSONB DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Deliverables
+      CREATE TABLE IF NOT EXISTS deliverables (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        type TEXT DEFAULT 'document',
+        path TEXT DEFAULT '',
+        url TEXT DEFAULT '',
+        agent TEXT DEFAULT '',
+        project TEXT DEFAULT '',
+        size_bytes BIGINT DEFAULT 0,
+        metadata JSONB DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Settings (key-value store)
+      CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value JSONB NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
+      -- Create updated_at trigger function
+      CREATE OR REPLACE FUNCTION update_updated_at()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        NEW.updated_at = NOW();
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+
+      -- Apply triggers
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'kanban_updated') THEN
+          CREATE TRIGGER kanban_updated BEFORE UPDATE ON kanban_tasks
+          FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'cron_updated') THEN
+          CREATE TRIGGER cron_updated BEFORE UPDATE ON cron_tasks
+          FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'agents_updated') THEN
+          CREATE TRIGGER agents_updated BEFORE UPDATE ON agents
+          FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+        END IF;
+      END $$;
+    `);
+    console.log('✅ Database schema ready');
+  } finally {
+    client.release();
+  }
+}
+
+// ═══════════════════════════════════════════
+// API ROUTES
+// ═══════════════════════════════════════════
+
+// ─── Health Check ───
+app.get('/api/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({
+      status: 'healthy',
+      version: '1.0.0',
+      uptime: process.uptime(),
+      database: 'connected',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(503).json({ status: 'unhealthy', database: 'disconnected', error: err.message });
+  }
+});
+
+// ─── KANBAN ───
+app.get('/api/kanban', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM kanban_tasks ORDER BY created_at DESC');
+    // Group by status for frontend
+    const board = {};
+    rows.forEach(task => {
+      if (!board[task.status]) board[task.status] = [];
+      board[task.status].push(task);
+    });
+    res.json({ tasks: rows, board });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/kanban', async (req, res) => {
+  const { id, title, description, status, priority, agent, tags, due_date } = req.body;
+  const taskId = id || `task-${Date.now()}`;
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO kanban_tasks (id, title, description, status, priority, agent, tags, due_date)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       ON CONFLICT (id) DO UPDATE SET
+         title = EXCLUDED.title, description = EXCLUDED.description,
+         status = EXCLUDED.status, priority = EXCLUDED.priority,
+         agent = EXCLUDED.agent, tags = EXCLUDED.tags, due_date = EXCLUDED.due_date
+       RETURNING *`,
+      [taskId, title, description || '', status || 'todo', priority || 'medium', agent || '', tags || [], due_date || '']
+    );
+    await logActivity('system', 'kanban_update', `Task "${title}" ${id ? 'updated' : 'created'}`, 'kanban');
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/kanban/:id', async (req, res) => {
+  const { id } = req.params;
+  const fields = req.body;
+  try {
+    const sets = [];
+    const vals = [];
+    let idx = 1;
+    for (const [key, val] of Object.entries(fields)) {
+      if (['title', 'description', 'status', 'priority', 'agent', 'tags', 'due_date'].includes(key)) {
+        sets.push(`${key} = $${idx}`);
+        vals.push(val);
+        idx++;
+      }
+    }
+    vals.push(id);
+    const { rows } = await pool.query(
+      `UPDATE kanban_tasks SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`, vals
+    );
+    res.json(rows[0] || { error: 'Not found' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/kanban/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM kanban_tasks WHERE id = $1', [req.params.id]);
+    res.json({ deleted: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Bulk save — for drag-and-drop reordering / full board sync
+app.post('/api/kanban/sync', async (req, res) => {
+  const { tasks } = req.body;
+  if (!Array.isArray(tasks)) return res.status(400).json({ error: 'tasks array required' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const t of tasks) {
+      await client.query(
+        `INSERT INTO kanban_tasks (id, title, description, status, priority, agent, tags, due_date)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (id) DO UPDATE SET
+           title = EXCLUDED.title, description = EXCLUDED.description,
+           status = EXCLUDED.status, priority = EXCLUDED.priority,
+           agent = EXCLUDED.agent, tags = EXCLUDED.tags, due_date = EXCLUDED.due_date`,
+        [t.id, t.title, t.description || '', t.status || 'todo', t.priority || 'medium', t.agent || '', t.tags || [], t.due_date || '']
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ synced: tasks.length });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ─── CRON TASKS ───
+app.get('/api/crons', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM cron_tasks ORDER BY created_at DESC');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/crons', async (req, res) => {
+  const { id, name, type, project, state, minute, hour, day, month, weekday, agent, description, enabled } = req.body;
+  const cronId = id || `cron-${Date.now()}`;
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO cron_tasks (id, name, type, project, state, minute, hour, day, month, weekday, agent, description, enabled)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+       ON CONFLICT (id) DO UPDATE SET
+         name=EXCLUDED.name, type=EXCLUDED.type, project=EXCLUDED.project,
+         state=EXCLUDED.state, minute=EXCLUDED.minute, hour=EXCLUDED.hour,
+         day=EXCLUDED.day, month=EXCLUDED.month, weekday=EXCLUDED.weekday,
+         agent=EXCLUDED.agent, description=EXCLUDED.description, enabled=EXCLUDED.enabled
+       RETURNING *`,
+      [cronId, name, type||'scheduled', project||'No project', state||'idle',
+       minute||'*', hour||'*', day||'*', month||'*', weekday||'*',
+       agent||'', description||'', enabled !== false]
+    );
+    await logActivity('system', 'cron_update', `Task "${name}" ${id ? 'updated' : 'created'}`, 'scheduler');
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/crons/:id', async (req, res) => {
+  const { id } = req.params;
+  const fields = req.body;
+  try {
+    const allowed = ['name','type','project','state','minute','hour','day','month','weekday','agent','description','enabled','last_run','next_run'];
+    const sets = [], vals = [];
+    let idx = 1;
+    for (const [key, val] of Object.entries(fields)) {
+      if (allowed.includes(key)) { sets.push(`${key} = $${idx}`); vals.push(val); idx++; }
+    }
+    vals.push(id);
+    const { rows } = await pool.query(`UPDATE cron_tasks SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`, vals);
+    res.json(rows[0] || { error: 'Not found' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/crons/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM cron_tasks WHERE id = $1', [req.params.id]);
+    res.json({ deleted: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── AGENTS ───
+app.get('/api/agents', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM agents ORDER BY name');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/agents', async (req, res) => {
+  const { id, name, role, department, status, avatar, color, doc, config } = req.body;
+  const agentId = id || `agent-${Date.now()}`;
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO agents (id, name, role, department, status, avatar, color, doc, config)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (id) DO UPDATE SET
+         name=EXCLUDED.name, role=EXCLUDED.role, department=EXCLUDED.department,
+         status=EXCLUDED.status, avatar=EXCLUDED.avatar, color=EXCLUDED.color,
+         doc=EXCLUDED.doc, config=EXCLUDED.config
+       RETURNING *`,
+      [agentId, name, role||'', department||'', status||'idle', avatar||'', color||'#00E5FF', doc||'', config||{}]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/agents/:id', async (req, res) => {
+  const { id } = req.params;
+  const fields = req.body;
+  try {
+    const allowed = ['name','role','department','status','avatar','color','doc','config'];
+    const sets = [], vals = [];
+    let idx = 1;
+    for (const [key, val] of Object.entries(fields)) {
+      if (allowed.includes(key)) { sets.push(`${key} = $${idx}`); vals.push(key === 'config' ? JSON.stringify(val) : val); idx++; }
+    }
+    vals.push(id);
+    const { rows } = await pool.query(`UPDATE agents SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`, vals);
+    res.json(rows[0] || { error: 'Not found' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ACTIVITY LOGS ───
+async function logActivity(agent, action, detail, category = 'system', severity = 'info', metadata = {}) {
+  try {
+    await pool.query(
+      'INSERT INTO activity_logs (agent, action, detail, category, severity, metadata) VALUES ($1,$2,$3,$4,$5,$6)',
+      [agent, action, detail, category, severity, metadata]
+    );
+  } catch (err) {
+    console.error('Log error:', err.message);
+  }
+}
+
+app.get('/api/activity', async (req, res) => {
+  const limit = Math.min(parseInt(req.query.limit || '100'), 500);
+  const offset = parseInt(req.query.offset || '0');
+  const agent = req.query.agent;
+  const category = req.query.category;
+  try {
+    let query = 'SELECT * FROM activity_logs';
+    const conditions = [], vals = [];
+    let idx = 1;
+    if (agent) { conditions.push(`agent = $${idx}`); vals.push(agent); idx++; }
+    if (category) { conditions.push(`category = $${idx}`); vals.push(category); idx++; }
+    if (conditions.length) query += ' WHERE ' + conditions.join(' AND ');
+    query += ` ORDER BY created_at DESC LIMIT $${idx} OFFSET $${idx+1}`;
+    vals.push(limit, offset);
+    const { rows } = await pool.query(query, vals);
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/activity', async (req, res) => {
+  const { agent, action, detail, category, severity, metadata } = req.body;
+  try {
+    await logActivity(agent || 'system', action, detail || '', category, severity, metadata);
+    res.json({ logged: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── DELIVERABLES ───
+app.get('/api/deliverables', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM deliverables ORDER BY created_at DESC');
+    // Also scan the shared volume for new files
+    const delivDir = process.env.DELIVERABLES_PATH || '/app/data/deliverables';
+    let files = [];
+    if (existsSync(delivDir)) {
+      files = readdirSync(delivDir).map(f => {
+        const stat = statSync(join(delivDir, f));
+        return { name: f, size_bytes: stat.size, created_at: stat.birthtime, path: join(delivDir, f) };
+      });
+    }
+    res.json({ database: rows, filesystem: files });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── SETTINGS ───
+app.get('/api/settings', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM settings');
+    const settings = {};
+    rows.forEach(r => { settings[r.key] = r.value; });
+    res.json(settings);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings', async (req, res) => {
+  const entries = req.body; // { key: value, key: value, ... }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    for (const [key, value] of Object.entries(entries)) {
+      await client.query(
+        `INSERT INTO settings (key, value) VALUES ($1, $2)
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+        [key, JSON.stringify(value)]
+      );
+    }
+    await client.query('COMMIT');
+    res.json({ saved: Object.keys(entries).length });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ─── BACKUP & RESTORE ───
+app.post('/api/backup', async (req, res) => {
+  try {
+    const [kanban, crons, agents, settings, activity] = await Promise.all([
+      pool.query('SELECT * FROM kanban_tasks'),
+      pool.query('SELECT * FROM cron_tasks'),
+      pool.query('SELECT * FROM agents'),
+      pool.query('SELECT * FROM settings'),
+      pool.query('SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT 1000'),
+    ]);
+    const backup = {
+      version: '1.0.0',
+      timestamp: new Date().toISOString(),
+      data: {
+        kanban: kanban.rows,
+        crons: crons.rows,
+        agents: agents.rows,
+        settings: settings.rows,
+        activity: activity.rows,
+      },
+    };
+    // Save to filesystem too
+    const backupDir = '/app/backups';
+    mkdirSync(backupDir, { recursive: true });
+    const filename = `salty-os-backup-${Date.now()}.json`;
+    writeFileSync(join(backupDir, filename), JSON.stringify(backup, null, 2));
+    await logActivity('system', 'backup_created', `Backup: ${filename}`, 'system');
+    res.json(backup);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/restore', async (req, res) => {
+  const { data } = req.body;
+  if (!data) return res.status(400).json({ error: 'No backup data provided' });
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // Clear and restore each table
+    if (data.kanban) {
+      await client.query('DELETE FROM kanban_tasks');
+      for (const t of data.kanban) {
+        await client.query(
+          `INSERT INTO kanban_tasks (id,title,description,status,priority,agent,tags,due_date,created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [t.id, t.title, t.description, t.status, t.priority, t.agent, t.tags, t.due_date, t.created_at]
+        );
+      }
+    }
+    if (data.crons) {
+      await client.query('DELETE FROM cron_tasks');
+      for (const c of data.crons) {
+        await client.query(
+          `INSERT INTO cron_tasks (id,name,type,project,state,minute,hour,day,month,weekday,agent,description,enabled,created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          [c.id,c.name,c.type,c.project,c.state,c.minute,c.hour,c.day,c.month,c.weekday,c.agent,c.description,c.enabled,c.created_at]
+        );
+      }
+    }
+    if (data.agents) {
+      await client.query('DELETE FROM agents');
+      for (const a of data.agents) {
+        await client.query(
+          `INSERT INTO agents (id,name,role,department,status,avatar,color,doc,config,created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+          [a.id,a.name,a.role,a.department,a.status,a.avatar,a.color,a.doc,a.config,a.created_at]
+        );
+      }
+    }
+    if (data.settings) {
+      await client.query('DELETE FROM settings');
+      for (const s of data.settings) {
+        await client.query('INSERT INTO settings (key,value) VALUES ($1,$2)', [s.key, s.value]);
+      }
+    }
+    await client.query('COMMIT');
+    await logActivity('system', 'backup_restored', 'Full restore completed', 'system');
+    res.json({ restored: true, tables: { kanban: data.kanban?.length, crons: data.crons?.length, agents: data.agents?.length, settings: data.settings?.length } });
+  } catch (err) {
+    await client.query('ROLLBACK');
+    res.status(500).json({ error: err.message });
+  } finally {
+    client.release();
+  }
+});
+
+// ─── BACKUP LIST ───
+app.get('/api/backups', async (req, res) => {
+  const backupDir = '/app/backups';
+  mkdirSync(backupDir, { recursive: true });
+  try {
+    const files = readdirSync(backupDir)
+      .filter(f => f.endsWith('.json'))
+      .map(f => {
+        const stat = statSync(join(backupDir, f));
+        return { filename: f, size: stat.size, created: stat.birthtime };
+      })
+      .sort((a, b) => new Date(b.created) - new Date(a.created));
+    res.json(files);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── SERVICE PROXY — Agent Zero ───
+app.all('/api/proxy/agent-zero/*', async (req, res) => {
+  const targetUrl = `${process.env.AGENT_ZERO_URL || 'http://agent-zero:80'}${req.params[0] ? '/' + req.params[0] : ''}`;
+  try {
+    const response = await fetch(targetUrl, {
+      method: req.method,
+      headers: { 'Content-Type': 'application/json' },
+      ...(req.method !== 'GET' ? { body: JSON.stringify(req.body) } : {}),
+    });
+    const data = await response.json().catch(() => response.text());
+    res.status(response.status).json(data);
+  } catch (err) {
+    res.status(502).json({ error: `Agent Zero unreachable: ${err.message}` });
+  }
+});
+
+// ─── SERVICE PROXY — n8n ───
+app.all('/api/proxy/n8n/*', async (req, res) => {
+  const targetUrl = `${process.env.N8N_URL || 'http://n8n:5678'}${req.params[0] ? '/' + req.params[0] : ''}`;
+  try {
+    const response = await fetch(targetUrl, {
+      method: req.method,
+      headers: { 'Content-Type': 'application/json' },
+      ...(req.method !== 'GET' ? { body: JSON.stringify(req.body) } : {}),
+    });
+    const data = await response.json().catch(() => response.text());
+    res.status(response.status).json(data);
+  } catch (err) {
+    res.status(502).json({ error: `n8n unreachable: ${err.message}` });
+  }
+});
+
+// ─── SERVICE STATUS ───
+app.get('/api/services', async (req, res) => {
+  const services = {
+    'agent-zero': process.env.AGENT_ZERO_URL || 'http://agent-zero:80',
+    'n8n': process.env.N8N_URL || 'http://n8n:5678',
+    'postiz': process.env.POSTIZ_URL || 'http://postiz:5000',
+    'gotenberg': process.env.GOTENBERG_URL || 'http://gotenberg:3100',
+    'firecrawl': process.env.FIRECRAWL_URL || 'http://firecrawl:3002',
+    'stirling-pdf': process.env.STIRLING_URL || 'http://stirling-pdf:8080',
+  };
+  const results = {};
+  await Promise.all(
+    Object.entries(services).map(async ([name, url]) => {
+      try {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(), 3000);
+        const resp = await fetch(`${url}/`, { signal: controller.signal });
+        results[name] = { status: 'online', code: resp.status, url };
+      } catch {
+        results[name] = { status: 'offline', url };
+      }
+    })
+  );
+  res.json(results);
+});
+
+// ─── UPDATE TRIGGER ───
+app.post('/api/update/check', async (req, res) => {
+  try {
+    const result = execSync('cd /app && git fetch origin main --dry-run 2>&1', { encoding: 'utf-8', timeout: 10000 });
+    const behind = result.includes('main') || result.trim().length > 0;
+    res.json({ updateAvailable: behind, output: result.trim() });
+  } catch (err) {
+    res.json({ updateAvailable: false, error: err.message });
+  }
+});
+
+// ─── SEED DATA ───
+async function seedIfEmpty() {
+  const { rows } = await pool.query('SELECT COUNT(*) as count FROM agents');
+  if (parseInt(rows[0].count) > 0) return;
+  console.log('🌱 Seeding initial data...');
+
+  // Seed agents
+  const agents = [
+    { id: 'klaus', name: 'Klaus', role: 'Chief Operating Officer', department: 'Executive', avatar: '🎩', color: '#00E5FF' },
+    { id: 'axel', name: 'Axel', role: 'Lead Generation Specialist', department: 'Sales', avatar: '🎯', color: '#FF5252' },
+    { id: 'nova', name: 'Nova', role: 'Content & Social Media Manager', department: 'Marketing', avatar: '✨', color: '#B388FF' },
+    { id: 'vex', name: 'Vex', role: 'Outreach & Email Specialist', department: 'Sales', avatar: '📧', color: '#FFAB40' },
+    { id: 'echo', name: 'Echo', role: 'Market Research Analyst', department: 'Operations', avatar: '📊', color: '#00E676' },
+    { id: 'cipher', name: 'Cipher', role: 'Systems & Integration Engineer', department: 'Engineering', avatar: '🔧', color: '#64B5F6' },
+    { id: 'drift', name: 'Drift', role: 'Carrier Relations Manager', department: 'Operations', avatar: '🚛', color: '#FFB300' },
+    { id: 'pulse', name: 'Pulse', role: 'Analytics & Reporting', department: 'Operations', avatar: '📈', color: '#FF80AB' },
+    { id: 'sage', name: 'Sage', role: 'Compliance & Documentation', department: 'Operations', avatar: '📋', color: '#80CBC4' },
+  ];
+  for (const a of agents) {
+    await pool.query(
+      'INSERT INTO agents (id,name,role,department,avatar,color) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING',
+      [a.id, a.name, a.role, a.department, a.avatar, a.color]
+    );
+  }
+
+  // Seed cron tasks
+  const crons = [
+    { id: 'cron-1', name: 'Daily Prospect Scrape', type: 'scheduled', project: 'Lead Generation', state: 'idle', minute: '0', hour: '6', agent: 'axel', description: 'Scrape Apollo.io for new manufacturing leads' },
+    { id: 'cron-2', name: 'Social Media Post', type: 'scheduled', project: 'Marketing', state: 'running', minute: '0', hour: '9,14', weekday: '1-5', agent: 'nova', description: 'Auto-publish scheduled content' },
+    { id: 'cron-3', name: 'Market Rate Check', type: 'scheduled', project: 'Operations', state: 'idle', minute: '0', hour: '7', weekday: '1-5', agent: 'echo', description: 'Pull DAT/Truckstop rate data' },
+    { id: 'cron-4', name: 'Email Follow-up', type: 'scheduled', project: 'Lead Generation', state: 'disabled', minute: '0', hour: '8', weekday: '1-5', agent: 'vex', description: 'Send follow-up sequences' },
+    { id: 'cron-5', name: 'Weekly Freight Report', type: 'scheduled', project: 'Operations', state: 'idle', minute: '0', hour: '16', weekday: '5', agent: 'echo', description: 'Generate weekly market analysis PDF' },
+  ];
+  for (const c of crons) {
+    await pool.query(
+      `INSERT INTO cron_tasks (id,name,type,project,state,minute,hour,day,month,weekday,agent,description)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'*','*',$8,$9,$10) ON CONFLICT DO NOTHING`,
+      [c.id, c.name, c.type, c.project, c.state, c.minute, c.hour, c.weekday||'*', c.agent, c.description]
+    );
+  }
+
+  // Seed settings
+  await pool.query(
+    `INSERT INTO settings (key, value) VALUES ('company', $1) ON CONFLICT DO NOTHING`,
+    [JSON.stringify({ name: 'BKE Logistics LLC', title: 'Freight Brokerage', accentColor: '#00E5FF' })]
+  );
+
+  await logActivity('system', 'seed', 'Initial data seeded', 'system');
+  console.log('✅ Seed data loaded');
+}
+
+// ═══════════════════════════════════════════
+// START
+// ═══════════════════════════════════════════
+async function start() {
+  const connected = await connectWithRetry();
+  if (connected) {
+    await initDatabase();
+    await seedIfEmpty();
+  }
+  app.listen(PORT, '0.0.0.0', () => {
+    console.log(`🧂 Salty OS API running on port ${PORT}`);
+    console.log(`   Database: ${connected ? '✅ connected' : '❌ disconnected'}`);
+    console.log(`   Auth: ${AUTH_TOKEN ? '🔒 enabled' : '🔓 open (set SALTY_AUTH_TOKEN)'}`);
+  });
+}
+
+start();
