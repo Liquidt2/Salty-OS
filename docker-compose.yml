@@ -1,0 +1,34 @@
+# ═══════════════════════════════════════════
+# Salty OS — Docker Compose
+# One-command deploy: docker compose up -d --build
+# ═══════════════════════════════════════════
+
+services:
+  salty-os:
+    build: .
+    container_name: salty-os
+    restart: unless-stopped
+    ports:
+      - "${SALTY_PORT:-3000}:3000"
+    volumes:
+      # Persistent data — survives rebuilds and updates
+      - salty-data:/app/data
+      # Backup directory on host for easy access
+      - ./backups:/app/backups
+    environment:
+      - NODE_ENV=production
+      - TZ=${TZ:-America/Chicago}
+    networks:
+      - agent-network
+    labels:
+      - "com.salty-os.description=BKE Logistics Command Center"
+      - "com.salty-os.version=1.0.0"
+
+volumes:
+  salty-data:
+    name: salty-os-data
+
+networks:
+  agent-network:
+    external: true
+    name: agent-network
