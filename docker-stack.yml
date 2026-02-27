@@ -194,7 +194,11 @@ services:
       NEXT_PUBLIC_BACKEND_URL: https://postiz.bkelogistics.com/api
       BACKEND_INTERNAL_URL: http://localhost:3100
       FRONTEND_URL: https://postiz.bkelogistics.com
-      TEMPORAL_URL: temporal:7233
+      TEMPORAL_ADDRESS: temporal:7233
+      IS_GENERAL: "true"
+      STORAGE_PROVIDER: "local"
+      UPLOAD_DIRECTORY: "/uploads"
+      NEXT_PUBLIC_UPLOAD_DIRECTORY: "/uploads"
       NODE_OPTIONS: --dns-result-order=ipv4first
       TZ: America/Chicago
     depends_on:
