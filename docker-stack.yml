@@ -105,6 +105,7 @@ services:
     volumes:
       - salty-data:/app/data
       - salty-backups:/app/backups
+      - ./a0-shared/agents:/a0-agents
     depends_on:
       postgres:
         condition: service_healthy
@@ -136,6 +137,7 @@ services:
     volumes:
       - agent-zero-data:/a0/work_dir
       - agent-zero-memory:/a0/memory
+      - ./a0-shared/agents:/a0/agents
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - agent-network

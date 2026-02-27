@@ -295,47 +295,216 @@ function KanbanPage({ s, accent, settings, kanban, setKanban, agents }) {
 }
 
 function AgentsPage({ s, accent, agents, setAgents, a0Agents }) {
-  const [sel, setSel] = useState(null); const [editing, setEditing] = useState(false); const [ec, setEc] = useState(""); const [addM, setAddM] = useState(false);
-  const [na, setNa] = useState({ name: "", role: "", dept: "", desc: "" });
-  const [taskModal, setTaskModal] = useState(null); const [taskMsg, setTaskMsg] = useState(""); const [taskResp, setTaskResp] = useState(null); const [sending, setSending] = useState(false);
-  const addAgent = async () => {
-    const newAgent = { id: "a" + Date.now(), ...na, status: "idle", file: na.name.toLowerCase() + ".md" };
-    setAgents([...agents, newAgent]); setAddM(false); setNa({ name: "", role: "", dept: "", desc: "" });
-    await api('/agents', { method: 'POST', body: newAgent });
+  const [a0Profiles, setA0Profiles] = useState([]); const [loading, setLoading] = useState(true);
+  const [sel, setSel] = useState(null); const [editFile, setEditFile] = useState(null); const [fileContent, setFileContent] = useState('');
+  const [saving, setSaving] = useState(false); const [createModal, setCreateModal] = useState(false);
+  const [newAgent, setNewAgent] = useState({ key: '', label: '', role_prompt: '', context: '' });
+  const [newFileModal, setNewFileModal] = useState(null); const [newFileName, setNewFileName] = useState(''); const [newFileIsFolder, setNewFileIsFolder] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(null);
+
+  // Load A0 agent profiles from shared volume
+  const loadProfiles = async () => {
+    setLoading(true);
+    const data = await api('/a0/agents');
+    if (data) setA0Profiles(data);
+    setLoading(false);
   };
-  const deleteAgent = async (id) => { setAgents(agents.filter(a => a.id !== id)); setSel(null); await api(`/agents/${id}`, { method: 'DELETE' }); };
-  const saveAgent = async (updated) => { setAgents(agents.map(a => a.id === updated.id ? updated : a)); await api(`/agents/${updated.id}`, { method: 'PUT', body: updated }); };
-  const sendTask = async () => {
-    if (!taskMsg.trim()) return; setSending(true); setTaskResp(null);
-    const resp = await a0('message', { text: taskMsg, chat_id: null });
-    setTaskResp(resp); setSending(false);
+  useEffect(() => { loadProfiles(); }, []);
+
+  // Open a file for editing
+  const openFile = async (agentKey, filePath) => {
+    const data = await api(`/a0/agents/${agentKey}/file/${filePath}`);
+    if (data) { setEditFile({ agent: agentKey, path: filePath, name: filePath.split('/').pop() }); setFileContent(data.content); }
   };
-  return (<div>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Agent Registry</h1><Btn s={s} accent={accent} onClick={() => setAddM(true)}>{I.plus} Add Agent</Btn></div>
-    {a0Agents.length > 0 && <div style={{ marginBottom: 24 }}><div style={{ fontSize: 13, fontWeight: 700, color: s.textMuted, marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>Agent Zero Profiles</div><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>{a0Agents.map(p => (<div key={p.key} style={{ padding: "10px 18px", background: accent + "10", border: `1px solid ${ACCENT.cyan}25`, borderRadius: 14, display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => { setTaskModal(p); setTaskMsg(""); setTaskResp(null); }}><div style={{ width: 28, height: 28, borderRadius: 10, background: `linear-gradient(135deg, ${ACCENT.cyan}40, ${ACCENT.purple}40)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: ACCENT.cyan }}>{p.label[0]}</div><span style={{ fontSize: 14, fontWeight: 600, color: s.text }}>{p.label}</span><span style={{ fontSize: 11, color: ACCENT.cyan, fontWeight: 600 }}>A0</span></div>))}</div></div>}
-    <div style={{ fontSize: 13, fontWeight: 700, color: s.textMuted, marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>BKE Agents</div>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
-      {agents.map(a => (<Card key={a.id} color={a.status === "active" ? ACCENT.green : ACCENT.amber} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} onClick={() => { setSel(a); setEc(a.desc); setEditing(false); }}>
-        <div style={{ padding: "20px 20px 20px 22px" }}><div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}><div style={{ width: 42, height: 42, borderRadius: 14, background: `linear-gradient(135deg, ${ACCENT.cyan}30, ${ACCENT.purple}30)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, color: ACCENT.cyan, fontFamily: "'Space Grotesk'" }}>{a.name[0]}</div><div><div style={{ fontSize: 16, fontWeight: 700, color: s.text }}>{a.name}</div><div style={{ fontSize: 12, color: s.textMuted }}>{a.role}</div></div><div style={{ marginLeft: "auto" }}><StatusDot status={a.status} /></div></div><div style={{ display: "flex", gap: 8 }}><Badge text={a.dept} color={ACCENT.cyan} /><Badge text={a.status} color={a.status === "active" ? ACCENT.green : ACCENT.amber} /></div></div>
-      </Card>))}
+
+  // Save file
+  const saveFile = async () => {
+    if (!editFile) return;
+    setSaving(true);
+    await api(`/a0/agents/${editFile.agent}/file/${editFile.path}`, { method: 'PUT', body: { content: fileContent } });
+    setSaving(false);
+    // Refresh the selected agent tree
+    const updated = await api(`/a0/agents/${editFile.agent}`);
+    if (updated) {
+      setA0Profiles(a0Profiles.map(p => p.key === editFile.agent ? { ...p, ...updated } : p));
+      setSel(prev => prev?.key === editFile.agent ? { ...prev, ...updated } : prev);
+    }
+  };
+
+  // Create new agent
+  const createAgent = async () => {
+    if (!newAgent.key.trim()) return;
+    const resp = await api('/a0/agents', { method: 'POST', body: newAgent });
+    if (resp?.ok) { setCreateModal(false); setNewAgent({ key: '', label: '', role_prompt: '', context: '' }); loadProfiles(); }
+  };
+
+  // Delete agent
+  const deleteAgent = async (key) => {
+    const resp = await api(`/a0/agents-profile/${key}`, { method: 'DELETE' });
+    if (resp?.ok) { setConfirmDelete(null); setSel(null); loadProfiles(); }
+  };
+
+  // Create new file/folder inside agent
+  const createFile = async (agentKey) => {
+    if (!newFileName.trim()) return;
+    await api(`/a0/agents/${agentKey}/file`, { method: 'POST', body: { path: newFileName, isFolder: newFileIsFolder, content: '' } });
+    setNewFileModal(null); setNewFileName(''); setNewFileIsFolder(false);
+    const updated = await api(`/a0/agents/${agentKey}`);
+    if (updated) {
+      setA0Profiles(a0Profiles.map(p => p.key === agentKey ? { ...p, ...updated } : p));
+      setSel(prev => prev?.key === agentKey ? { ...prev, ...updated } : prev);
+    }
+  };
+
+  // Delete a file inside agent
+  const deleteFile = async (agentKey, filePath) => {
+    await api(`/a0/agents/${agentKey}/file/${filePath}`, { method: 'DELETE' });
+    const updated = await api(`/a0/agents/${agentKey}`);
+    if (updated) {
+      setA0Profiles(a0Profiles.map(p => p.key === agentKey ? { ...p, ...updated } : p));
+      setSel(prev => prev?.key === agentKey ? { ...prev, ...updated } : prev);
+    }
+    if (editFile?.agent === agentKey && editFile?.path === filePath) setEditFile(null);
+  };
+
+  // Recursive file tree renderer
+  const FileTree = ({ items, agentKey, depth = 0 }) => (
+    <div style={{ paddingLeft: depth * 16 }}>
+      {items.map(item => (
+        <div key={item.path}>
+          {item.type === 'folder' ? (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', borderRadius: 8, color: ACCENT.amber, fontSize: 13, fontWeight: 600 }}>
+                <span style={{ fontSize: 14 }}>📁</span> {item.name}
+              </div>
+              {item.children && <FileTree items={item.children} agentKey={agentKey} depth={depth + 1} />}
+            </div>
+          ) : (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', borderRadius: 8, cursor: 'pointer', fontSize: 13, color: s.text, transition: 'background 0.15s',
+              background: editFile?.agent === agentKey && editFile?.path === item.path ? ACCENT.cyan + '15' : 'transparent',
+            }}
+              onClick={() => openFile(agentKey, item.path)}
+              onMouseEnter={e => { if (!(editFile?.agent === agentKey && editFile?.path === item.path)) e.currentTarget.style.background = s.bgInput; }}
+              onMouseLeave={e => { if (!(editFile?.agent === agentKey && editFile?.path === item.path)) e.currentTarget.style.background = 'transparent'; }}
+            >
+              <span style={{ fontSize: 14 }}>{item.name.endsWith('.json') ? '⚙️' : '📄'}</span>
+              <span style={{ flex: 1 }}>{item.name}</span>
+              <span style={{ fontSize: 11, color: s.textDim, fontFamily: "'JetBrains Mono'" }}>{item.size < 1024 ? item.size + ' B' : (item.size / 1024).toFixed(1) + ' KB'}</span>
+              <button onClick={e => { e.stopPropagation(); deleteFile(agentKey, item.path); }} style={{ background: 'none', border: 'none', color: ACCENT.red, cursor: 'pointer', padding: 2, opacity: 0.4, fontSize: 12 }} title="Delete file">{I.trash}</button>
+            </div>
+          )}
+        </div>
+      ))}
     </div>
-    <Modal open={!!sel} onClose={() => setSel(null)} title={sel?.name || ""} s={s}>{sel && (<>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}><Badge text={sel.role} color={ACCENT.cyan} /><Badge text={sel.dept} color={ACCENT.purple} /><Badge text={sel.status} color={sel.status === "active" ? ACCENT.green : ACCENT.amber} /></div>
-      <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 12 }}>📄 {sel.file}</div>
-      {editing ? (<><textarea value={ec} onChange={e => setEc(e.target.value)} style={{ width: "100%", minHeight: 200, padding: 16, background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 14, color: s.text, fontSize: 14, fontFamily: "'JetBrains Mono', monospace", resize: "vertical", outline: "none", boxSizing: "border-box" }} /><div style={{ display: "flex", gap: 12, marginTop: 12 }}><Btn s={s} accent={accent} onClick={() => { const updated = { ...sel, desc: ec }; saveAgent(updated); setEditing(false); setSel(updated); }}>Save</Btn><Btn s={s} accent={accent} variant="ghost" onClick={() => setEditing(false)}>Cancel</Btn></div></>) : (<><div style={{ padding: 16, background: s.bgInput, borderRadius: 14, fontSize: 14, color: s.text, lineHeight: 1.6, marginBottom: 16, whiteSpace: "pre-wrap" }}>{sel.desc}</div><div style={{ display: "flex", gap: 12 }}><Btn s={s} accent={accent} onClick={() => setEditing(true)}>{I.edit} Edit</Btn><Btn s={s} accent={accent} variant="danger" onClick={() => deleteAgent(sel.id)}>{I.trash} Delete</Btn></div></>)}
-    </>)}</Modal>
-    <Modal open={addM} onClose={() => setAddM(false)} title="Add Agent" s={s}>
-      <Inp label="Name" value={na.name} onChange={e => setNa({ ...na, name: e.target.value })} s={s} placeholder="Agent name..." />
-      <Inp label="Role" value={na.role} onChange={e => setNa({ ...na, role: e.target.value })} s={s} placeholder="e.g. Sales Specialist" />
-      <Inp label="Department" value={na.dept} onChange={e => setNa({ ...na, dept: e.target.value })} s={s} placeholder="e.g. Sales" />
-      <Inp label="Description" value={na.desc} onChange={e => setNa({ ...na, desc: e.target.value })} s={s} multiline placeholder="Capabilities..." />
-      <div style={{ display: "flex", gap: 12, marginTop: 8 }}><Btn s={s} accent={accent} onClick={addAgent} style={{ flex: 1 }}>Add Agent</Btn><Btn s={s} accent={accent} variant="ghost" onClick={() => setAddM(false)}>Cancel</Btn></div>
+  );
+
+  const isBuiltIn = (key) => ['_example', 'agent0'].includes(key);
+
+  return (<div>
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28, flexWrap: 'wrap', gap: 12 }}>
+      <div><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Agent Zero Profiles</h1><div style={{ fontSize: 13, color: s.textMuted, marginTop: 4 }}>File-based agent profiles synced with Agent Zero at <code style={{ color: ACCENT.cyan, fontFamily: "'JetBrains Mono'", fontSize: 12 }}>/a0/agents</code></div></div>
+      <div style={{ display: 'flex', gap: 10 }}><Btn s={s} variant="ghost" onClick={loadProfiles}>{I.refresh} Refresh</Btn><Btn s={s} onClick={() => setCreateModal(true)}>{I.plus} New Profile</Btn></div>
+    </div>
+
+    {loading ? <div style={{ textAlign: 'center', padding: 60, color: s.textMuted }}>Loading agent profiles...</div> : (
+    <div style={{ display: 'grid', gridTemplateColumns: sel ? '340px 1fr' : 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16, transition: 'all 0.3s' }}>
+
+      {/* Left: Agent profile cards */}
+      <div style={{ display: 'flex', flexDirection: sel ? 'column' : 'row', flexWrap: sel ? 'nowrap' : 'wrap', gap: 12, ...(sel ? { maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' } : {}) }}>
+        {a0Profiles.map(p => (
+          <Card key={p.key} color={sel?.key === p.key ? ACCENT.cyan : (isBuiltIn(p.key) ? ACCENT.purple : ACCENT.green)}
+            style={{ background: sel?.key === p.key ? ACCENT.cyan + '08' : s.bgCard, border: `1px solid ${sel?.key === p.key ? ACCENT.cyan + '40' : s.border}`, boxShadow: s.shadow, ...(sel ? {} : { minWidth: 280 }) }}
+            onClick={() => { setSel(p); setEditFile(null); }}
+          >
+            <div style={{ padding: '18px 20px 18px 22px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                <div style={{ width: 40, height: 40, borderRadius: 12, background: `linear-gradient(135deg, ${isBuiltIn(p.key) ? ACCENT.purple : ACCENT.cyan}30, ${ACCENT.amber}20)`, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: isBuiltIn(p.key) ? ACCENT.purple : ACCENT.cyan, fontFamily: "'Space Grotesk'" }}>{(p.label || p.key)[0].toUpperCase()}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 15, fontWeight: 700, color: s.text }}>{p.label || p.key}</div>
+                  <div style={{ fontSize: 12, color: s.textMuted, fontFamily: "'JetBrains Mono'" }}>{p.key}/</div>
+                </div>
+                {isBuiltIn(p.key) && <Badge text="built-in" color={ACCENT.purple} />}
+              </div>
+              {!sel && <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
+                {(p.tree || []).filter(f => f.type === 'file').map(f => <span key={f.name} style={{ fontSize: 11, color: s.textDim, background: s.bgInput, padding: '2px 8px', borderRadius: 6 }}>{f.name}</span>)}
+                {(p.tree || []).filter(f => f.type === 'folder').map(f => <span key={f.name} style={{ fontSize: 11, color: ACCENT.amber, background: ACCENT.amber + '10', padding: '2px 8px', borderRadius: 6 }}>📁 {f.name}/</span>)}
+              </div>}
+            </div>
+          </Card>
+        ))}
+      </div>
+
+      {/* Right: Detail panel when selected */}
+      {sel && (
+        <div style={{ background: s.bgCard, borderRadius: 20, border: `1px solid ${s.border}`, overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100vh - 200px)' }}>
+          {/* Header */}
+          <div style={{ padding: '18px 24px', borderBottom: `1px solid ${s.border}`, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 18, fontWeight: 800, color: s.text, fontFamily: "'Space Grotesk'" }}>{sel.label || sel.key}</div>
+              <div style={{ fontSize: 12, color: s.textMuted, fontFamily: "'JetBrains Mono'" }}>/a0/agents/{sel.key}/</div>
+            </div>
+            <Btn s={s} variant="ghost" onClick={() => setNewFileModal(sel.key)} style={{ fontSize: 12, padding: '6px 12px' }}>{I.plus} File</Btn>
+            {!isBuiltIn(sel.key) && <Btn s={s} variant="danger" onClick={() => setConfirmDelete(sel.key)} style={{ fontSize: 12, padding: '6px 12px' }}>{I.trash}</Btn>}
+            <button onClick={() => { setSel(null); setEditFile(null); }} style={{ background: 'none', border: 'none', color: s.textMuted, cursor: 'pointer', fontSize: 18, padding: '4px 8px' }}>✕</button>
+          </div>
+
+          <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+            {/* File tree */}
+            <div style={{ width: 260, borderRight: `1px solid ${s.border}`, overflowY: 'auto', padding: '12px 8px' }}>
+              <div style={{ fontSize: 11, fontWeight: 700, color: s.textMuted, textTransform: 'uppercase', letterSpacing: 1, padding: '4px 10px', marginBottom: 4 }}>Files</div>
+              <FileTree items={sel.tree || []} agentKey={sel.key} />
+            </div>
+
+            {/* File editor */}
+            <div style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+              {editFile ? (<>
+                <div style={{ padding: '10px 16px', borderBottom: `1px solid ${s.border}`, display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ fontSize: 14 }}>{editFile.name.endsWith('.json') ? '⚙️' : '📄'}</span>
+                  <span style={{ fontSize: 13, fontWeight: 600, color: s.text, flex: 1 }}>{editFile.path}</span>
+                  <Btn s={s} onClick={saveFile} style={{ fontSize: 12, padding: '5px 14px' }}>{saving ? '...' : 'Save'}</Btn>
+                </div>
+                <textarea value={fileContent} onChange={e => setFileContent(e.target.value)} style={{
+                  flex: 1, padding: 16, background: s.bg, border: 'none', color: s.text, fontSize: 13, fontFamily: "'JetBrains Mono', monospace",
+                  lineHeight: 1.7, resize: 'none', outline: 'none', width: '100%', boxSizing: 'border-box',
+                }} />
+              </>) : (
+                <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: s.textDim, fontSize: 14 }}>
+                  <div style={{ textAlign: 'center' }}><div style={{ fontSize: 32, marginBottom: 8, opacity: 0.4 }}>📂</div>Select a file to edit</div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>)}
+
+    {/* Create Agent Modal */}
+    <Modal open={createModal} onClose={() => setCreateModal(false)} title="Create Agent Profile" s={s}>
+      <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 16, lineHeight: 1.5 }}>Creates a new folder in <code style={{ color: ACCENT.cyan }}>/a0/agents/</code> with the standard Agent Zero structure: agent.json, _context.md, and prompt files.</div>
+      <Inp label="Folder Name (key)" hint="Lowercase, no spaces. This becomes the folder name." value={newAgent.key} onChange={e => setNewAgent({ ...newAgent, key: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') })} s={s} placeholder="e.g. klaus" mono />
+      <Inp label="Display Name" hint="Name shown in Agent Zero UI" value={newAgent.label} onChange={e => setNewAgent({ ...newAgent, label: e.target.value })} s={s} placeholder="e.g. Klaus — COO" />
+      <Inp label="Context (_context.md)" value={newAgent.context} onChange={e => setNewAgent({ ...newAgent, context: e.target.value })} s={s} multiline placeholder="Agent context information..." />
+      <Inp label="Role Prompt (agent.system.main.role.md)" value={newAgent.role_prompt} onChange={e => setNewAgent({ ...newAgent, role_prompt: e.target.value })} s={s} multiline placeholder="You are Klaus, the Chief Operations Officer for BKE Logistics..." />
+      <div style={{ display: 'flex', gap: 12, marginTop: 8 }}><Btn s={s} onClick={createAgent} style={{ flex: 1 }}>Create Profile</Btn><Btn s={s} variant="ghost" onClick={() => setCreateModal(false)}>Cancel</Btn></div>
     </Modal>
-    <Modal open={!!taskModal} onClose={() => setTaskModal(null)} title={`Send Task to ${taskModal?.label || ''}`} s={s}>
-      <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 16 }}>Send a message to Agent Zero using the <strong style={{ color: ACCENT.cyan }}>{taskModal?.label}</strong> profile.</div>
-      <textarea value={taskMsg} onChange={e => setTaskMsg(e.target.value)} placeholder="Describe the task..." style={{ width: "100%", minHeight: 120, padding: 16, background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 14, color: s.text, fontSize: 14, fontFamily: "'DM Sans', sans-serif", resize: "vertical", outline: "none", boxSizing: "border-box" }} />
-      <div style={{ display: "flex", gap: 12, marginTop: 12 }}><Btn s={s} accent={accent} onClick={sendTask} disabled={sending}>{sending ? "Sending..." : "Send Task"}</Btn><Btn s={s} accent={accent} variant="ghost" onClick={() => setTaskModal(null)}>Cancel</Btn></div>
-      {taskResp && <div style={{ marginTop: 16, padding: 16, background: s.bgInput, borderRadius: 14, fontSize: 13, color: s.text, lineHeight: 1.6, maxHeight: 300, overflow: "auto", whiteSpace: "pre-wrap", fontFamily: "'JetBrains Mono', monospace" }}>{taskResp.ok ? JSON.stringify(taskResp, null, 2) : `Error: ${taskResp.error || 'Unknown error'}`}</div>}
+
+    {/* New File Modal */}
+    <Modal open={!!newFileModal} onClose={() => setNewFileModal(null)} title="New File / Folder" s={s}>
+      <Inp label="Name" hint="Path relative to agent folder (e.g. prompts/custom.md)" value={newFileName} onChange={e => setNewFileName(e.target.value)} s={s} placeholder="filename.md" mono />
+      <label style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 0', color: s.text, fontSize: 14, cursor: 'pointer' }}>
+        <input type="checkbox" checked={newFileIsFolder} onChange={e => setNewFileIsFolder(e.target.checked)} /> Create as folder
+      </label>
+      <div style={{ display: 'flex', gap: 12, marginTop: 8 }}><Btn s={s} onClick={() => createFile(newFileModal)} style={{ flex: 1 }}>Create</Btn><Btn s={s} variant="ghost" onClick={() => setNewFileModal(null)}>Cancel</Btn></div>
+    </Modal>
+
+    {/* Confirm Delete Modal */}
+    <Modal open={!!confirmDelete} onClose={() => setConfirmDelete(null)} title="Delete Agent Profile" s={s}>
+      <div style={{ padding: 16, background: ACCENT.red + '10', border: `1px solid ${ACCENT.red}25`, borderRadius: 14, marginBottom: 16 }}>
+        <div style={{ color: ACCENT.red, fontSize: 14, fontWeight: 700, marginBottom: 6 }}>⚠️ This will permanently delete:</div>
+        <code style={{ color: s.text, fontSize: 13, fontFamily: "'JetBrains Mono'" }}>/a0/agents/{confirmDelete}/</code>
+        <div style={{ color: s.textMuted, fontSize: 13, marginTop: 8 }}>This removes the agent from Agent Zero. This action cannot be undone.</div>
+      </div>
+      <div style={{ display: 'flex', gap: 12 }}><Btn s={s} variant="danger" onClick={() => deleteAgent(confirmDelete)}>Delete Permanently</Btn><Btn s={s} variant="ghost" onClick={() => setConfirmDelete(null)}>Cancel</Btn></div>
     </Modal>
   </div>);
 }

@@ -6,7 +6,7 @@
 import express from 'express';
 import pg from 'pg';
 import cors from 'cors';
-import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, unlinkSync, copyFileSync, renameSync } from 'fs';
 import { join } from 'path';
 import { execSync } from 'child_process';
 import crypto from 'crypto';
@@ -622,6 +622,210 @@ app.get('/api/backups', async (req, res) => {
       })
       .sort((a, b) => new Date(b.created) - new Date(a.created));
     res.json(files);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ═══════════════════════════════════════════
+// A0 AGENTS — File-based CRUD (shared volume)
+// Reads/writes /a0-agents which is bind-mounted
+// to the same dir as Agent Zero's /a0/agents
+// ═══════════════════════════════════════════
+const A0_AGENTS_DIR = process.env.A0_AGENTS_DIR || '/a0-agents';
+
+// Helper: recursively read a directory tree
+function readDirTree(dirPath, basePath = '') {
+  if (!existsSync(dirPath)) return [];
+  const entries = readdirSync(dirPath, { withFileTypes: true });
+  const tree = [];
+  for (const entry of entries) {
+    const fullPath = join(dirPath, entry.name);
+    const relPath = basePath ? `${basePath}/${entry.name}` : entry.name;
+    if (entry.isDirectory()) {
+      tree.push({ name: entry.name, path: relPath, type: 'folder', children: readDirTree(fullPath, relPath) });
+    } else {
+      const stat = statSync(fullPath);
+      tree.push({ name: entry.name, path: relPath, type: 'file', size: stat.size });
+    }
+  }
+  return tree.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
+}
+
+// LIST all agent profiles
+app.get('/api/a0/agents', (req, res) => {
+  try {
+    if (!existsSync(A0_AGENTS_DIR)) return res.json([]);
+    const dirs = readdirSync(A0_AGENTS_DIR, { withFileTypes: true })
+      .filter(d => d.isDirectory())
+      .map(d => {
+        const agentDir = join(A0_AGENTS_DIR, d.name);
+        const jsonPath = join(agentDir, 'agent.json');
+        const contextPath = join(agentDir, '_context.md');
+        let config = {};
+        let context = '';
+        try { config = JSON.parse(readFileSync(jsonPath, 'utf-8')); } catch {}
+        try { context = readFileSync(contextPath, 'utf-8'); } catch {}
+        return {
+          key: d.name,
+          label: config.name || config.label || d.name,
+          config,
+          context,
+          tree: readDirTree(agentDir),
+        };
+      });
+    res.json(dirs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET single agent profile with full tree
+app.get('/api/a0/agents/:key', (req, res) => {
+  try {
+    const agentDir = join(A0_AGENTS_DIR, req.params.key);
+    if (!existsSync(agentDir)) return res.status(404).json({ error: 'Agent not found' });
+    const jsonPath = join(agentDir, 'agent.json');
+    const contextPath = join(agentDir, '_context.md');
+    let config = {};
+    let context = '';
+    try { config = JSON.parse(readFileSync(jsonPath, 'utf-8')); } catch {}
+    try { context = readFileSync(contextPath, 'utf-8'); } catch {}
+    res.json({ key: req.params.key, config, context, tree: readDirTree(agentDir) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// READ a specific file from an agent profile
+app.get('/api/a0/agents/:key/file/*', (req, res) => {
+  try {
+    const filePath = join(A0_AGENTS_DIR, req.params.key, req.params[0]);
+    if (!existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+    const content = readFileSync(filePath, 'utf-8');
+    res.json({ path: req.params[0], content });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// WRITE/UPDATE a specific file in an agent profile
+app.put('/api/a0/agents/:key/file/*', (req, res) => {
+  try {
+    const relPath = req.params[0];
+    const filePath = join(A0_AGENTS_DIR, req.params.key, relPath);
+    const parentDir = join(filePath, '..');
+    mkdirSync(parentDir, { recursive: true });
+    writeFileSync(filePath, req.body.content || '', 'utf-8');
+    res.json({ ok: true, path: relPath });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// CREATE new agent profile (folder + template files matching A0 structure)
+app.post('/api/a0/agents', (req, res) => {
+  try {
+    const { key, label, role_prompt, context } = req.body;
+    if (!key) return res.status(400).json({ error: 'Agent key required' });
+    const safeKey = key.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    const agentDir = join(A0_AGENTS_DIR, safeKey);
+    if (existsSync(agentDir)) return res.status(409).json({ error: 'Agent already exists' });
+
+    mkdirSync(join(agentDir, 'prompts'), { recursive: true });
+
+    writeFileSync(join(agentDir, 'agent.json'), JSON.stringify({
+      name: label || safeKey,
+      use_main_model: true,
+    }, null, 2), 'utf-8');
+
+    writeFileSync(join(agentDir, '_context.md'),
+      context || `# ${label || safeKey}\n\nAgent context goes here.\n`, 'utf-8');
+
+    writeFileSync(join(agentDir, 'prompts', 'agent.system.main.role.md'),
+      role_prompt || `# ${label || safeKey}\n\nYou are ${label || safeKey}. Define your role and capabilities here.\n`, 'utf-8');
+
+    // Copy tool response template from agent0 if available
+    const a0ToolResp = join(A0_AGENTS_DIR, 'agent0', 'prompts', 'agent.system.tool.response.md');
+    if (existsSync(a0ToolResp)) {
+      copyFileSync(a0ToolResp, join(agentDir, 'prompts', 'agent.system.tool.response.md'));
+    } else {
+      writeFileSync(join(agentDir, 'prompts', 'agent.system.tool.response.md'),
+        '# Tool Response\n\nProcess tool responses and provide relevant information to the user.\n', 'utf-8');
+    }
+
+    res.json({ ok: true, key: safeKey, tree: readDirTree(agentDir) });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// CREATE new file/folder inside an agent profile
+app.post('/api/a0/agents/:key/file', (req, res) => {
+  try {
+    const { path: relPath, content, isFolder } = req.body;
+    if (!relPath) return res.status(400).json({ error: 'Path required' });
+    const fullPath = join(A0_AGENTS_DIR, req.params.key, relPath);
+    if (existsSync(fullPath)) return res.status(409).json({ error: 'Already exists' });
+    if (isFolder) {
+      mkdirSync(fullPath, { recursive: true });
+    } else {
+      mkdirSync(join(fullPath, '..'), { recursive: true });
+      writeFileSync(fullPath, content || '', 'utf-8');
+    }
+    res.json({ ok: true, path: relPath });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE file/folder from agent profile
+app.delete('/api/a0/agents/:key/file/*', (req, res) => {
+  try {
+    const filePath = join(A0_AGENTS_DIR, req.params.key, req.params[0]);
+    if (!existsSync(filePath)) return res.status(404).json({ error: 'File not found' });
+    const stat = statSync(filePath);
+    if (stat.isDirectory()) {
+      rmSync(filePath, { recursive: true });
+    } else {
+      unlinkSync(filePath);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE entire agent profile
+app.delete('/api/a0/agents-profile/:key', (req, res) => {
+  try {
+    const agentDir = join(A0_AGENTS_DIR, req.params.key);
+    if (!existsSync(agentDir)) return res.status(404).json({ error: 'Agent not found' });
+    if (['_example', 'agent0'].includes(req.params.key)) {
+      return res.status(403).json({ error: 'Cannot delete built-in agent profile' });
+    }
+    rmSync(agentDir, { recursive: true });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// RENAME agent profile folder
+app.put('/api/a0/agents-profile/:key/rename', (req, res) => {
+  try {
+    const { newKey } = req.body;
+    if (!newKey) return res.status(400).json({ error: 'New key required' });
+    const safeNew = newKey.toLowerCase().replace(/[^a-z0-9_-]/g, '');
+    const oldDir = join(A0_AGENTS_DIR, req.params.key);
+    const newDir = join(A0_AGENTS_DIR, safeNew);
+    if (!existsSync(oldDir)) return res.status(404).json({ error: 'Agent not found' });
+    if (existsSync(newDir)) return res.status(409).json({ error: 'Target name already exists' });
+    renameSync(oldDir, newDir);
+    res.json({ ok: true, key: safeNew });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
