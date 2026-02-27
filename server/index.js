@@ -603,30 +603,52 @@ app.get('/api/backups', async (req, res) => {
 });
 
 // ─── SERVICE PROXY — Agent Zero ───
-// ─── AGENT ZERO CSRF SESSION MANAGEMENT ───
+// ─── AGENT ZERO SESSION MANAGEMENT (Login + CSRF) ───
 const a0Session = { cookie: null, csrfToken: null, lastRefresh: 0 };
 const A0_URL = process.env.AGENT_ZERO_URL || 'http://agent-zero:80';
+const A0_USER = process.env.A0_AUTH_LOGIN || 'admin';
+const A0_PASS = process.env.A0_AUTH_PASSWORD || 'admin';
 
-async function getA0CsrfToken() {
+async function getA0Session() {
   const now = Date.now();
-  // Refresh CSRF token every 10 minutes or if we don't have one
+  // Reuse session for 10 minutes
   if (a0Session.csrfToken && (now - a0Session.lastRefresh) < 600000) {
     return a0Session;
   }
   try {
-    const resp = await fetch(`${A0_URL}/csrf_token`, {
-      method: 'GET',
-      headers: { 'Accept': 'application/json' },
+    // Step 1: Login to get session cookie
+    const loginResp = await fetch(`${A0_URL}/login`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: `username=${encodeURIComponent(A0_USER)}&password=${encodeURIComponent(A0_PASS)}`,
+      redirect: 'manual', // Don't follow redirect, just capture cookies
     });
-    const setCookies = resp.headers.getSetCookie?.() || [];
-    const cookieStr = setCookies.map(c => c.split(';')[0]).join('; ');
-    const data = await resp.json();
-    a0Session.cookie = cookieStr;
+    const loginCookies = loginResp.headers.getSetCookie?.() || [];
+    const cookieStr = loginCookies.map(c => c.split(';')[0]).join('; ');
+    if (!cookieStr) {
+      console.error('A0 login: no session cookie returned');
+      return a0Session;
+    }
+    console.log('A0 login: session established');
+
+    // Step 2: Get CSRF token using authenticated session
+    const csrfResp = await fetch(`${A0_URL}/csrf_token`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json', 'Cookie': cookieStr },
+    });
+    // Merge any new cookies from CSRF response
+    const csrfCookies = csrfResp.headers.getSetCookie?.() || [];
+    const allCookies = [...loginCookies, ...csrfCookies].map(c => c.split(';')[0]);
+    const mergedCookies = [...new Set(allCookies)].join('; ');
+
+    const data = await csrfResp.json();
+    a0Session.cookie = mergedCookies;
     a0Session.csrfToken = data.csrf_token || data.token;
     a0Session.lastRefresh = now;
+    console.log('A0 CSRF token acquired:', !!a0Session.csrfToken);
     return a0Session;
   } catch (err) {
-    console.error('Failed to get A0 CSRF token:', err.message);
+    console.error('A0 session setup failed:', err.message);
     return a0Session;
   }
 }
@@ -636,8 +658,8 @@ app.all('/api/proxy/agent-zero/*', async (req, res) => {
   const path = req.params[0] || '';
   const targetUrl = `${A0_URL}/${path}`;
   try {
-    // Get CSRF token for non-GET requests
-    const session = await getA0CsrfToken();
+    // Get authenticated session with CSRF token
+    const session = await getA0Session();
     const headers = { 'Content-Type': 'application/json' };
     if (session.csrfToken) headers['X-CSRF-Token'] = session.csrfToken;
     if (session.cookie) headers['Cookie'] = session.cookie;
@@ -651,7 +673,7 @@ app.all('/api/proxy/agent-zero/*', async (req, res) => {
     // If CSRF failed, refresh token and retry once
     if (response.status === 403) {
       a0Session.lastRefresh = 0;
-      const retrySession = await getA0CsrfToken();
+      const retrySession = await getA0Session();
       const retryHeaders = { 'Content-Type': 'application/json' };
       if (retrySession.csrfToken) retryHeaders['X-CSRF-Token'] = retrySession.csrfToken;
       if (retrySession.cookie) retryHeaders['Cookie'] = retrySession.cookie;
