@@ -48,6 +48,8 @@ services:
     volumes:
       - salty-data:/app/data
       - salty-backups:/app/backups
+      - ./a0-shared/agents:/a0-agents
+      - ./a0-shared/scheduler:/a0-scheduler
     networks:
       - agent-network
     labels:

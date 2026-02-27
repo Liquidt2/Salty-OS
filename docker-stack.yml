@@ -106,6 +106,7 @@ services:
       - salty-data:/app/data
       - salty-backups:/app/backups
       - ./a0-shared/agents:/a0-agents
+      - ./a0-shared/scheduler:/a0-scheduler
     depends_on:
       postgres:
         condition: service_healthy
@@ -138,6 +139,7 @@ services:
       - agent-zero-data:/a0/work_dir
       - agent-zero-memory:/a0/memory
       - ./a0-shared/agents:/a0/agents
+      - ./a0-shared/scheduler:/a0/usr/scheduler
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - agent-network

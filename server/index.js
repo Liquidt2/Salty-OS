@@ -831,6 +831,115 @@ app.put('/api/a0/agents-profile/:key/rename', (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════
+// A0 SCHEDULER — File-based CRUD (shared volume)
+// Reads/writes /a0-scheduler/tasks.json which is
+// bind-mounted to Agent Zero's /a0/usr/scheduler
+// ═══════════════════════════════════════════
+const A0_SCHEDULER_DIR = process.env.A0_SCHEDULER_DIR || '/a0-scheduler';
+const A0_TASKS_FILE = join(A0_SCHEDULER_DIR, 'tasks.json');
+
+function readTasks() {
+  try {
+    if (!existsSync(A0_TASKS_FILE)) return [];
+    const data = JSON.parse(readFileSync(A0_TASKS_FILE, 'utf-8'));
+    return data.tasks || [];
+  } catch { return []; }
+}
+
+function writeTasks(tasks) {
+  mkdirSync(A0_SCHEDULER_DIR, { recursive: true });
+  writeFileSync(A0_TASKS_FILE, JSON.stringify({ tasks }, null, 2), 'utf-8');
+}
+
+function genUUID(len = 8) {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let r = '';
+  for (let i = 0; i < len; i++) r += chars[Math.floor(Math.random() * chars.length)];
+  return r;
+}
+
+// LIST all tasks
+app.get('/api/a0/scheduler', (req, res) => {
+  try { res.json(readTasks()); }
+  catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET single task
+app.get('/api/a0/scheduler/:uuid', (req, res) => {
+  try {
+    const tasks = readTasks();
+    const task = tasks.find(t => t.uuid === req.params.uuid);
+    if (!task) return res.status(404).json({ error: 'Task not found' });
+    res.json(task);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// CREATE task (A0-native format)
+app.post('/api/a0/scheduler', (req, res) => {
+  try {
+    const tasks = readTasks();
+    const uuid = genUUID();
+    const now = new Date().toISOString();
+    const task = {
+      uuid,
+      context_id: uuid,
+      state: 'idle',
+      name: req.body.name || 'Untitled Task',
+      system_prompt: req.body.system_prompt || '',
+      prompt: req.body.prompt || '',
+      attachments: req.body.attachments || [],
+      project_name: req.body.project_name || null,
+      project_color: req.body.project_color || null,
+      created_at: now,
+      updated_at: now,
+      last_run: null,
+      last_result: null,
+      type: req.body.type || 'scheduled',
+      schedule: {
+        minute: req.body.schedule?.minute || '0',
+        hour: req.body.schedule?.hour || '*',
+        day: req.body.schedule?.day || '*',
+        month: req.body.schedule?.month || '*',
+        weekday: req.body.schedule?.weekday || '*',
+        timezone: req.body.schedule?.timezone || 'America/Chicago',
+      },
+    };
+    tasks.push(task);
+    writeTasks(tasks);
+    res.json(task);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// UPDATE task
+app.put('/api/a0/scheduler/:uuid', (req, res) => {
+  try {
+    const tasks = readTasks();
+    const idx = tasks.findIndex(t => t.uuid === req.params.uuid);
+    if (idx === -1) return res.status(404).json({ error: 'Task not found' });
+    const updated = { ...tasks[idx], ...req.body, updated_at: new Date().toISOString() };
+    // Merge schedule fields if partial
+    if (req.body.schedule) {
+      updated.schedule = { ...tasks[idx].schedule, ...req.body.schedule };
+    }
+    tasks[idx] = updated;
+    writeTasks(tasks);
+    res.json(updated);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE task
+app.delete('/api/a0/scheduler/:uuid', (req, res) => {
+  try {
+    let tasks = readTasks();
+    const len = tasks.length;
+    tasks = tasks.filter(t => t.uuid !== req.params.uuid);
+    if (tasks.length === len) return res.status(404).json({ error: 'Task not found' });
+    writeTasks(tasks);
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ─── SERVICE PROXY — Agent Zero ───
 // ─── AGENT ZERO SESSION MANAGEMENT (Login + CSRF) ───
 const a0Session = { cookie: null, csrfToken: null, lastRefresh: 0 };

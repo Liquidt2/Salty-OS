@@ -510,54 +510,148 @@ function AgentsPage({ s, accent, agents, setAgents, a0Agents }) {
 }
 
 // ─── SCHEDULER (Agent Zero Style) ───
-function SchedulerPage({ s, accent, crons, setCrons, agents }) {
-  const [modal, setModal] = useState(false); const [editCron, setEditCron] = useState(null); const [viewCron, setViewCron] = useState(null);
-  const empty = { name: "", type: "scheduled", project: "No project", state: "idle", minute: "*", hour: "*", day: "*", month: "*", weekday: "*", agent: agents[0]?.name || "", desc: "" };
-  const [form, setForm] = useState(empty);
-  const projOpts = [{ value: "No project", label: "No project" }, { value: "Lead Generation", label: "Lead Generation" }, { value: "Marketing", label: "Marketing" }, { value: "Operations", label: "Operations" }, { value: "Engineering", label: "Engineering" }];
-  const typeOpts = [{ value: "scheduled", label: "Scheduled (Cron)" }, { value: "manual", label: "Manual Trigger" }, { value: "webhook", label: "Webhook" }, { value: "event", label: "Event-Driven" }];
+function SchedulerPage({ s, accent }) {
+  const [tasks, setTasks] = useState([]);
+  const [modal, setModal] = useState(false);
+  const [editTask, setEditTask] = useState(null);
+  const [viewTask, setViewTask] = useState(null);
+  const [loading, setLoading] = useState(true);
 
-  const Fields = ({ data, setData }) => (<>
-    <Inp label="Task Name" hint="A unique name to identify this task" value={data.name} onChange={e => setData({ ...data, name: e.target.value })} s={s} placeholder="Enter task name" />
-    <Sel label="Type" hint="Task execution method" value={data.type} onChange={e => setData({ ...data, type: e.target.value })} s={s} options={typeOpts} />
-    <Sel label="Project" hint="Inherited from the active chat project." value={data.project} onChange={e => setData({ ...data, project: e.target.value })} s={s} options={projOpts} />
-    <Sel label="Assign Agent" hint="Agent responsible for executing this task" value={data.agent} onChange={e => setData({ ...data, agent: e.target.value })} s={s} options={agents.map(a => ({ value: a.name, label: `${a.name} — ${a.role}` }))} />
-    <StateToggle value={data.state} onChange={v => setData({ ...data, state: v })} s={s} />
-    <CronFields minute={data.minute} hour={data.hour} day={data.day} month={data.month} weekday={data.weekday} onChange={(k, v) => setData({ ...data, [k]: v })} s={s} />
-    <Inp label="Description" hint="What does this task do?" value={data.desc} onChange={e => setData({ ...data, desc: e.target.value })} s={s} multiline placeholder="Task description..." />
-  </>);
+  const empty = { name: "", type: "scheduled", system_prompt: "", prompt: "", project_name: null, project_color: null, schedule: { minute: "0", hour: "*", day: "*", month: "*", weekday: "*", timezone: "America/Chicago" } };
+  const [form, setForm] = useState(empty);
+  const typeOpts = [{ value: "scheduled", label: "Scheduled (Cron)" }, { value: "manual", label: "Manual Trigger" }];
+  const tzOpts = [{ value: "America/Chicago", label: "CST (America/Chicago)" }, { value: "America/New_York", label: "EST (America/New_York)" }, { value: "America/Los_Angeles", label: "PST (America/Los_Angeles)" }, { value: "UTC", label: "UTC" }];
+
+  const loadTasks = async () => { try { const r = await api('/a0/scheduler'); if (Array.isArray(r)) setTasks(r); } catch {} setLoading(false); };
+  useEffect(() => { loadTasks(); }, []);
+
+  const fmtDate = (d) => { if (!d) return '—'; try { return new Date(d).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch { return d; } };
+  const cronStr = (sch) => sch ? `${sch.minute} ${sch.hour} ${sch.day} ${sch.month} ${sch.weekday}` : '* * * * *';
+
+  const Fields = ({ data, setData }) => {
+    const sch = data.schedule || {};
+    const setSch = (k, v) => setData({ ...data, schedule: { ...sch, [k]: v } });
+    return (<>
+      <Inp label="Task Name" hint="Unique identifier (slug-style)" value={data.name} onChange={e => setData({ ...data, name: e.target.value })} s={s} placeholder="e.g. daily-bible-sms-cst" />
+      <Sel label="Type" hint="Task execution method" value={data.type} onChange={e => setData({ ...data, type: e.target.value })} s={s} options={typeOpts} />
+      <Inp label="System Prompt" hint="Agent persona / role instructions" value={data.system_prompt} onChange={e => setData({ ...data, system_prompt: e.target.value })} s={s} multiline placeholder="Agent role and capabilities..." />
+      <Inp label="Prompt" hint="Step-by-step execution instructions" value={data.prompt} onChange={e => setData({ ...data, prompt: e.target.value })} s={s} multiline placeholder="1. First step&#10;2. Second step..." />
+      <Sel label="Timezone" value={sch.timezone || 'America/Chicago'} onChange={e => setSch('timezone', e.target.value)} s={s} options={tzOpts} />
+      <CronFields minute={sch.minute || '*'} hour={sch.hour || '*'} day={sch.day || '*'} month={sch.month || '*'} weekday={sch.weekday || '*'} onChange={(k, v) => setSch(k, v)} s={s} />
+    </>);
+  };
 
   return (<div>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Task Scheduler</h1><Btn s={s} accent={accent} onClick={() => setModal(true)}>{I.plus} Create Task</Btn></div>
-    <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 24 }}>Manage scheduled tasks and automated processes for Agent Zero.</div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+      <h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Task Scheduler</h1>
+      <div style={{ display: "flex", gap: 8 }}>
+        <Btn s={s} accent={accent} variant="ghost" onClick={loadTasks}>↻ Refresh</Btn>
+        <Btn s={s} accent={accent} onClick={() => { setForm(empty); setModal(true); }}>{I.plus} Create Task</Btn>
+      </div>
+    </div>
+    <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 24 }}>Live from Agent Zero — <code style={{ color: ACCENT.cyan, fontFamily: "'JetBrains Mono'", fontSize: 12 }}>/a0/usr/scheduler/tasks.json</code> — {tasks.length} task{tasks.length !== 1 ? 's' : ''}</div>
+
+    {loading ? <div style={{ color: s.textMuted, padding: 40, textAlign: "center" }}>Loading tasks...</div> :
+    tasks.length === 0 ? <div style={{ color: s.textMuted, padding: 40, textAlign: "center", background: s.bgCard, borderRadius: 16, border: `1px solid ${s.border}` }}>No scheduled tasks. Create one or add tasks in Agent Zero.</div> :
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {crons.map(cr => (<Card key={cr.id} color={STATE_COLORS[cr.state]} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} onClick={() => setViewCron(cr)}>
+      {tasks.map(t => (<Card key={t.uuid} color={STATE_COLORS[t.state] || ACCENT.cyan} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow, cursor: "pointer" }} onClick={() => setViewTask(t)}>
         <div style={{ padding: "18px 20px 18px 22px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
-          <StatusDot status={cr.state === "idle" ? "active" : cr.state} />
-          <div style={{ flex: 1, minWidth: 180 }}><div style={{ fontSize: 15, fontWeight: 700, color: s.text }}>{cr.name}</div><div style={{ fontSize: 12, color: s.textMuted, marginTop: 2 }}>{cr.desc}</div></div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}><Badge text={cr.state} color={STATE_COLORS[cr.state]} /><Badge text={cr.type} color={ACCENT.cyan} /><Badge text={cr.agent} color={ACCENT.purple} />{cr.project !== "No project" && <Badge text={cr.project} color={ACCENT.amber} />}</div>
-          <code style={{ fontSize: 12, color: ACCENT.cyan, fontFamily: "'JetBrains Mono', monospace", background: accent + "10", padding: "4px 10px", borderRadius: 8, whiteSpace: "nowrap" }}>{cr.minute} {cr.hour} {cr.day} {cr.month} {cr.weekday}</code>
-          <div style={{ fontSize: 11, color: s.textMuted, minWidth: 120 }}><div>Last: {cr.lastRun}</div><div>Next: {cr.nextRun}</div></div>
+          <StatusDot status={t.state === "idle" ? "active" : t.state === "running" ? "active" : "inactive"} />
+          <div style={{ flex: 1, minWidth: 180 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: s.text }}>{t.name}</div>
+            <div style={{ fontSize: 12, color: s.textMuted, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 400 }}>{t.system_prompt ? t.system_prompt.slice(0, 80) + (t.system_prompt.length > 80 ? '...' : '') : 'No system prompt'}</div>
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <Badge text={t.state || 'idle'} color={STATE_COLORS[t.state] || ACCENT.cyan} />
+            <Badge text={t.type || 'scheduled'} color={ACCENT.cyan} />
+            {t.schedule?.timezone && <Badge text={t.schedule.timezone.split('/')[1] || t.schedule.timezone} color={ACCENT.purple} />}
+            {t.project_name && <Badge text={t.project_name} color={ACCENT.amber} />}
+          </div>
+          <code style={{ fontSize: 12, color: ACCENT.cyan, fontFamily: "'JetBrains Mono', monospace", background: accent + "10", padding: "4px 10px", borderRadius: 8, whiteSpace: "nowrap" }}>{cronStr(t.schedule)}</code>
+          <div style={{ fontSize: 11, color: s.textMuted, minWidth: 100 }}>
+            <div>Last: {fmtDate(t.last_run)}</div>
+            <div>Created: {fmtDate(t.created_at)}</div>
+          </div>
           <div style={{ display: "flex", gap: 4 }} onClick={e => e.stopPropagation()}>
-            <button onClick={async () => { const newState = cr.state === "disabled" ? "idle" : "disabled"; setCrons(crons.map(c => c.id === cr.id ? { ...c, state: newState } : c)); await api(`/crons/${cr.id}`, { method: 'PUT', body: { ...cr, state: newState } }); }} style={{ background: s.bgInput, border: "none", borderRadius: 10, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: cr.state === "disabled" ? ACCENT.green : ACCENT.amber }}>{cr.state === "disabled" ? "Enable" : "Disable"}</button>
-            <button onClick={() => setEditCron({ ...cr })} style={{ background: "none", border: "none", color: s.textMuted, cursor: "pointer", padding: 6 }}>{I.edit}</button>
-            <button onClick={async () => { setCrons(crons.filter(c => c.id !== cr.id)); await api(`/crons/${cr.id}`, { method: 'DELETE' }); }} style={{ background: "none", border: "none", color: ACCENT.red, cursor: "pointer", padding: 6, opacity: 0.6 }}>{I.trash}</button>
+            <button onClick={async () => { const ns = t.state === "disabled" ? "idle" : "disabled"; const r = await api(`/a0/scheduler/${t.uuid}`, { method: 'PUT', body: { state: ns } }); if (r && !r.error) loadTasks(); }} style={{ background: s.bgInput, border: "none", borderRadius: 10, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: t.state === "disabled" ? ACCENT.green : ACCENT.amber }}>{t.state === "disabled" ? "Enable" : "Disable"}</button>
+            <button onClick={() => setEditTask({ ...t })} style={{ background: "none", border: "none", color: s.textMuted, cursor: "pointer", padding: 6 }}>{I.edit}</button>
+            <button onClick={async () => { await api(`/a0/scheduler/${t.uuid}`, { method: 'DELETE' }); loadTasks(); }} style={{ background: "none", border: "none", color: ACCENT.red, cursor: "pointer", padding: 6, opacity: 0.6 }}>{I.trash}</button>
           </div>
         </div>
       </Card>))}
-    </div>
+    </div>}
+
+    {/* CREATE MODAL */}
     <Modal open={modal} onClose={() => setModal(false)} title="Create New Task" s={s} wide>
       <div style={{ borderBottom: `1px solid ${s.border}`, marginBottom: 20 }} />
       <Fields data={form} setData={setForm} />
-      <div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}><Btn s={s} accent={accent} variant="ghost" onClick={() => setModal(false)}>Cancel</Btn><Btn s={s} accent={accent} onClick={async () => { const nCron = { id: "c" + Date.now(), ...form, lastRun: "—", nextRun: "Pending" }; setCrons([...crons, nCron]); setModal(false); setForm(empty); await api('/crons', { method: 'POST', body: nCron }); }}>Save</Btn></div>
+      <div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}>
+        <Btn s={s} accent={accent} variant="ghost" onClick={() => setModal(false)}>Cancel</Btn>
+        <Btn s={s} accent={accent} onClick={async () => { await api('/a0/scheduler', { method: 'POST', body: form }); setModal(false); setForm(empty); loadTasks(); }}>Save</Btn>
+      </div>
     </Modal>
-    <Modal open={!!editCron} onClose={() => setEditCron(null)} title="Edit Task" s={s} wide>{editCron && (<><div style={{ borderBottom: `1px solid ${s.border}`, marginBottom: 20 }} /><Fields data={editCron} setData={setEditCron} /><div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}><Btn s={s} accent={accent} variant="ghost" onClick={() => setEditCron(null)}>Cancel</Btn><Btn s={s} accent={accent} onClick={async () => { setCrons(crons.map(c => c.id === editCron.id ? editCron : c)); setEditCron(null); await api(`/crons/${editCron.id}`, { method: 'PUT', body: editCron }); }}>Save</Btn></div></>)}</Modal>
-    <Modal open={!!viewCron && !editCron} onClose={() => setViewCron(null)} title={viewCron?.name || ""} s={s}>{viewCron && (<>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}><Badge text={viewCron.state} color={STATE_COLORS[viewCron.state]} /><Badge text={viewCron.type} color={ACCENT.cyan} /><Badge text={viewCron.agent} color={ACCENT.purple} />{viewCron.project !== "No project" && <Badge text={viewCron.project} color={ACCENT.amber} />}</div>
-      <div style={{ padding: 16, background: s.bgInput, borderRadius: 14, marginBottom: 12 }}><div style={{ fontSize: 14, color: s.text, lineHeight: 1.6 }}>{viewCron.desc}</div></div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}><div style={{ padding: 12, background: s.bgInput, borderRadius: 12 }}><div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4 }}>Schedule</div><code style={{ fontSize: 14, color: ACCENT.cyan, fontFamily: "'JetBrains Mono'" }}>{viewCron.minute} {viewCron.hour} {viewCron.day} {viewCron.month} {viewCron.weekday}</code></div><div style={{ padding: 12, background: s.bgInput, borderRadius: 12 }}><div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4 }}>Last Run</div><div style={{ fontSize: 14, color: s.text }}>{viewCron.lastRun}</div></div></div>
-      <div style={{ display: "flex", gap: 12 }}><Btn s={s} accent={accent} onClick={() => { setEditCron({ ...viewCron }); setViewCron(null); }}>{I.edit} Edit</Btn><Btn s={s} accent={accent} variant="success" onClick={async () => { const r = await a0('message', { text: viewCron.desc || viewCron.name }); if (r?.ok) { const updated = { ...viewCron, lastRun: new Date().toLocaleString(), state: 'running' }; setCrons(crons.map(c => c.id === viewCron.id ? updated : c)); setViewCron(updated); } }}>{I.play} Run Now</Btn><Btn s={s} accent={accent} variant="danger" onClick={async () => { setCrons(crons.filter(c => c.id !== viewCron.id)); setViewCron(null); await api(`/crons/${viewCron.id}`, { method: 'DELETE' }); }}>{I.trash} Delete</Btn></div>
-    </>)}</Modal>
+
+    {/* EDIT MODAL */}
+    <Modal open={!!editTask} onClose={() => setEditTask(null)} title="Edit Task" s={s} wide>
+      {editTask && (<>
+        <div style={{ borderBottom: `1px solid ${s.border}`, marginBottom: 20 }} />
+        <Fields data={editTask} setData={setEditTask} />
+        <div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}>
+          <Btn s={s} accent={accent} variant="ghost" onClick={() => setEditTask(null)}>Cancel</Btn>
+          <Btn s={s} accent={accent} onClick={async () => { await api(`/a0/scheduler/${editTask.uuid}`, { method: 'PUT', body: { name: editTask.name, type: editTask.type, system_prompt: editTask.system_prompt, prompt: editTask.prompt, schedule: editTask.schedule, project_name: editTask.project_name } }); setEditTask(null); loadTasks(); }}>Save</Btn>
+        </div>
+      </>)}
+    </Modal>
+
+    {/* VIEW MODAL — full task detail with last_result */}
+    <Modal open={!!viewTask && !editTask} onClose={() => setViewTask(null)} title={viewTask?.name || ""} s={s} wide>
+      {viewTask && (<>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+          <Badge text={viewTask.state || 'idle'} color={STATE_COLORS[viewTask.state] || ACCENT.cyan} />
+          <Badge text={viewTask.type || 'scheduled'} color={ACCENT.cyan} />
+          {viewTask.schedule?.timezone && <Badge text={viewTask.schedule.timezone} color={ACCENT.purple} />}
+        </div>
+
+        {/* System Prompt */}
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>System Prompt</div>
+          <div style={{ padding: 14, background: s.bgInput, borderRadius: 12, fontSize: 13, color: s.text, lineHeight: 1.6, whiteSpace: "pre-wrap", maxHeight: 120, overflow: "auto" }}>{viewTask.system_prompt || '—'}</div>
+        </div>
+
+        {/* Prompt */}
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Prompt</div>
+          <div style={{ padding: 14, background: s.bgInput, borderRadius: 12, fontSize: 13, color: s.text, lineHeight: 1.6, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{viewTask.prompt || '—'}</div>
+        </div>
+
+        {/* Schedule + Timestamps */}
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
+          <div style={{ padding: 12, background: s.bgInput, borderRadius: 12 }}>
+            <div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4 }}>Schedule</div>
+            <code style={{ fontSize: 14, color: ACCENT.cyan, fontFamily: "'JetBrains Mono'" }}>{cronStr(viewTask.schedule)}</code>
+          </div>
+          <div style={{ padding: 12, background: s.bgInput, borderRadius: 12 }}>
+            <div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4 }}>Last Run</div>
+            <div style={{ fontSize: 13, color: s.text }}>{fmtDate(viewTask.last_run)}</div>
+          </div>
+          <div style={{ padding: 12, background: s.bgInput, borderRadius: 12 }}>
+            <div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4 }}>Created</div>
+            <div style={{ fontSize: 13, color: s.text }}>{fmtDate(viewTask.created_at)}</div>
+          </div>
+        </div>
+
+        {/* Last Result */}
+        {viewTask.last_result && (<div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Last Result</div>
+          <div style={{ padding: 14, background: "#0a1a0a", borderRadius: 12, fontSize: 12, color: ACCENT.green, lineHeight: 1.7, whiteSpace: "pre-wrap", maxHeight: 300, overflow: "auto", fontFamily: "'JetBrains Mono', monospace", border: `1px solid ${ACCENT.green}30` }}>{viewTask.last_result}</div>
+        </div>)}
+
+        <div style={{ display: "flex", gap: 12 }}>
+          <Btn s={s} accent={accent} onClick={() => { setEditTask({ ...viewTask }); setViewTask(null); }}>{I.edit} Edit</Btn>
+          <Btn s={s} accent={accent} variant="danger" onClick={async () => { await api(`/a0/scheduler/${viewTask.uuid}`, { method: 'DELETE' }); setViewTask(null); loadTasks(); }}>{I.trash} Delete</Btn>
+        </div>
+      </>)}
+    </Modal>
   </div>);
 }
 
@@ -790,7 +884,7 @@ export default function SaltyOS() {
     return () => { clearInterval(t); clearInterval(svcTimer); };
   }, []);
   const nav = [{ key: "dashboard", label: "Dashboard", icon: I.dashboard }, { key: "kanban", label: "Kanban", icon: I.kanban }, { key: "agents", label: "Agents", icon: I.agents }, { key: "scheduler", label: "Scheduler", icon: I.scheduler }, { key: "deliverables", label: "Deliverables", icon: I.deliverables }, { key: "logs", label: "Activity Logs", icon: I.logs }, { key: "org", label: "Org Chart", icon: I.org }, { key: "settings", label: "Settings", icon: I.settings }];
-  const renderPage = () => { switch (page) { case "dashboard": return <DashboardPage s={s} accent={accent} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; case "kanban": return <KanbanPage s={s} accent={accent} settings={settings} kanban={kanban} setKanban={setKanban} agents={agents} />; case "agents": return <AgentsPage s={s} accent={accent} agents={agents} setAgents={setAgents} a0Agents={a0Agents} />; case "scheduler": return <SchedulerPage s={s} accent={accent} crons={crons} setCrons={setCrons} agents={agents} />; case "deliverables": return <DeliverablesPage s={s} accent={accent} />; case "logs": return <LogsPage s={s} accent={accent} />; case "org": return <OrgChartPage s={s} />; case "settings": return <SettingsPage s={s} accent={accent} settings={settings} setSettings={setSettings} kanban={kanban} crons={crons} agents={agents} setKanban={setKanban} setCrons={setCrons} setAgents={setAgents} services={services} />; default: return <DashboardPage s={s} accent={accent} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; } };
+  const renderPage = () => { switch (page) { case "dashboard": return <DashboardPage s={s} accent={accent} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; case "kanban": return <KanbanPage s={s} accent={accent} settings={settings} kanban={kanban} setKanban={setKanban} agents={agents} />; case "agents": return <AgentsPage s={s} accent={accent} agents={agents} setAgents={setAgents} a0Agents={a0Agents} />; case "scheduler": return <SchedulerPage s={s} accent={accent} />; case "deliverables": return <DeliverablesPage s={s} accent={accent} />; case "logs": return <LogsPage s={s} accent={accent} />; case "org": return <OrgChartPage s={s} />; case "settings": return <SettingsPage s={s} accent={accent} settings={settings} setSettings={setSettings} kanban={kanban} crons={crons} agents={agents} setKanban={setKanban} setCrons={setCrons} setAgents={setAgents} services={services} />; default: return <DashboardPage s={s} accent={accent} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; } };
 
   return (<div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans', sans-serif", background: s.bg, color: s.text, overflow: "hidden", transition: "all 0.4s ease" }}>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
