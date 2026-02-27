@@ -195,6 +195,7 @@ services:
       BACKEND_INTERNAL_URL: http://localhost:3100
       FRONTEND_URL: https://postiz.bkelogistics.com
       TEMPORAL_URL: temporal:7233
+      NODE_OPTIONS: --dns-result-order=ipv4first
       TZ: America/Chicago
     depends_on:
       postgres:
