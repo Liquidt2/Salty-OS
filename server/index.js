@@ -636,13 +636,13 @@ async function getA0Session() {
       method: 'GET',
       headers: { 'Accept': 'application/json', 'Cookie': cookieStr },
     });
-    // Merge any new cookies from CSRF response
+    // The CSRF response returns an UPDATED session cookie with CSRF embedded
+    // Use ONLY this cookie (it supersedes the login cookie)
     const csrfCookies = csrfResp.headers.getSetCookie?.() || [];
-    const allCookies = [...loginCookies, ...csrfCookies].map(c => c.split(';')[0]);
-    const mergedCookies = [...new Set(allCookies)].join('; ');
+    const csrfCookieStr = csrfCookies.map(c => c.split(';')[0]).join('; ') || cookieStr;
 
     const data = await csrfResp.json();
-    a0Session.cookie = mergedCookies;
+    a0Session.cookie = csrfCookieStr;
     a0Session.csrfToken = data.csrf_token || data.token;
     a0Session.lastRefresh = now;
     console.log('A0 CSRF token acquired:', !!a0Session.csrfToken);
