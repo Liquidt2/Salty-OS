@@ -16,6 +16,24 @@ const PRIORITY_COLORS = { critical: "#FF5252", high: "#FFAB40", medium: "#FFB300
 const STATE_COLORS = { idle: "#00E5FF", running: "#00E676", disabled: "#64748b", error: "#FF5252" };
 const STATE_DESC = { idle: "Ready to run", running: "Currently executing", disabled: "Paused — will not execute", error: "Failed — check logs" };
 
+// ─── API Layer ───
+const API = window.location.hostname === 'localhost' ? 'http://localhost:3001/api' : '/api';
+const api = async (path, opts = {}) => {
+  try {
+    const res = await fetch(`${API}${path}`, {
+      headers: { 'Content-Type': 'application/json', ...opts.headers },
+      ...opts,
+      body: opts.body ? JSON.stringify(opts.body) : undefined,
+    });
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    return await res.json();
+  } catch (err) {
+    console.error(`API ${path}:`, err.message);
+    return null;
+  }
+};
+const a0 = (path, body) => api(`/proxy/agent-zero/${path}`, body ? { method: 'POST', body } : {});
+
 // ─── Data ───
 const initialKanban = {
   backlog: [
@@ -206,17 +224,19 @@ function CronFields({ minute, hour, day, month, weekday, onChange, s }) {
 // ═════════════════════════════════════════
 // PAGES
 // ═════════════════════════════════════════
-function DashboardPage({ s, kanban, crons, setPage }) {
+function DashboardPage({ s, kanban, crons, agents, services, a0Status, setPage }) {
   const c = { backlog: kanban.backlog.length, todo: kanban.todo.length, inProgress: kanban.inProgress.length, inReview: kanban.inReview.length, done: kanban.done.length };
   const total = Object.values(c).reduce((a, b) => a + b, 0);
-  const stats = [{ l: "Total Tasks", v: total, c: ACCENT.cyan, i: I.kanban }, { l: "Cron Jobs", v: crons.filter(x => x.state !== "disabled").length, c: ACCENT.amber, i: I.scheduler }, { l: "Active Agents", v: initialAgents.filter(a => a.status === "active").length, c: ACCENT.green, i: I.agents }, { l: "In Progress", v: c.inProgress, c: ACCENT.purple, i: I.bolt }];
+  const stats = [{ l: "Total Tasks", v: total, c: ACCENT.cyan, i: I.kanban }, { l: "Cron Jobs", v: crons.filter(x => x.state !== "disabled").length, c: ACCENT.amber, i: I.scheduler }, { l: "Active Agents", v: agents.filter(a => a.status === "active").length, c: ACCENT.green, i: I.agents }, { l: "In Progress", v: c.inProgress, c: ACCENT.purple, i: I.bolt }];
   const ks = [{ l: "Backlog", n: c.backlog, c: STATUS_COLORS.backlog }, { l: "To-Do", n: c.todo, c: STATUS_COLORS.todo }, { l: "In Progress", n: c.inProgress, c: STATUS_COLORS.inProgress }, { l: "In Review", n: c.inReview, c: STATUS_COLORS.inReview }, { l: "Done", n: c.done, c: STATUS_COLORS.done }];
   const ql = [{ l: "Agents", i: I.agents, p: "agents", c: ACCENT.cyan }, { l: "Scheduler", i: I.scheduler, p: "scheduler", c: ACCENT.amber }, { l: "Deliverables", i: I.deliverables, p: "deliverables", c: ACCENT.green }, { l: "Kanban Board", i: I.kanban, p: "kanban", c: ACCENT.purple }];
+  const svcList = services ? Object.entries(services).map(([name, info]) => ({ name, status: info.status || 'unknown', url: info.url || '' })) : [];
   return (<div>
-    <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 32 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif", letterSpacing: -0.5 }}>Command Center</h1><Badge text="Live" color={ACCENT.green} /></div>
+    <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 32 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif", letterSpacing: -0.5 }}>Command Center</h1><Badge text="Live" color={ACCENT.green} />{a0Status?.gitinfo && <Badge text={`A0 ${a0Status.gitinfo.short_tag}`} color={ACCENT.cyan} />}</div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 28 }}>
       {stats.map((x, i) => (<Card key={i} color={x.c} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }}><div style={{ padding: "22px 22px 22px 24px" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><div><div style={{ fontSize: 13, color: s.textMuted, fontWeight: 600, marginBottom: 6 }}>{x.l}</div><div style={{ fontSize: 36, fontWeight: 800, color: s.text, fontFamily: "'Space Grotesk', sans-serif", letterSpacing: -1 }}>{x.v}</div></div><div style={{ color: x.c, opacity: 0.6 }}>{x.i}</div></div></div></Card>))}
     </div>
+    {svcList.length > 0 && <Card color={ACCENT.green} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow, marginBottom: 28 }}><div style={{ padding: "22px 22px 22px 24px" }}><div style={{ fontSize: 15, fontWeight: 700, color: s.text, marginBottom: 18 }}>Services</div><div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: 10 }}>{svcList.map(sv => (<div key={sv.name} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: s.bgInput, borderRadius: 12 }}><div style={{ width: 8, height: 8, borderRadius: "50%", background: sv.status === "online" ? ACCENT.green : sv.status === "offline" ? ACCENT.red : ACCENT.amber, boxShadow: sv.status === "online" ? `0 0 8px ${ACCENT.green}60` : "none" }} /><span style={{ fontSize: 13, fontWeight: 600, color: s.text, flex: 1 }}>{sv.name}</span><span style={{ fontSize: 11, color: sv.status === "online" ? ACCENT.green : ACCENT.red, fontWeight: 600 }}>{sv.status}</span></div>))}</div></div></Card>}
     <Card color={ACCENT.cyan} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow, marginBottom: 28 }}><div style={{ padding: "22px 22px 22px 24px" }}><div style={{ fontSize: 15, fontWeight: 700, color: s.text, marginBottom: 18 }}>Kanban Overview</div><div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>{ks.map((x, i) => (<div key={i} style={{ flex: 1, minWidth: 100, background: x.c + "10", borderRadius: 16, padding: "14px 18px", border: `1px solid ${x.c}20`, textAlign: "center" }}><div style={{ fontSize: 28, fontWeight: 800, color: x.c, fontFamily: "'Space Grotesk', sans-serif" }}>{x.n}</div><div style={{ fontSize: 12, color: s.textMuted, fontWeight: 600, marginTop: 4 }}>{x.l}</div></div>))}</div></div></Card>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 16 }}>{ql.map((x, i) => (<Card key={i} color={x.c} onClick={() => setPage(x.p)} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }}><div style={{ padding: "20px 20px 20px 22px", display: "flex", alignItems: "center", gap: 14 }}><div style={{ color: x.c }}>{x.i}</div><span style={{ fontSize: 15, fontWeight: 700, color: s.text }}>{x.l}</span><span style={{ marginLeft: "auto", color: s.textDim }}>{I.chevron}</span></div></Card>))}</div>
   </div>);
@@ -226,9 +246,9 @@ function KanbanPage({ s, kanban, setKanban, agents }) {
   const [modal, setModal] = useState(false); const [dragOver, setDragOver] = useState(null); const [dragItem, setDragItem] = useState(null);
   const [form, setForm] = useState({ title: "", desc: "", agent: agents[0]?.name || "", priority: "medium", column: "todo" }); const [editTask, setEditTask] = useState(null);
   const cols = [{ key: "backlog", label: "Backlog", color: STATUS_COLORS.backlog }, { key: "todo", label: "To-Do", color: STATUS_COLORS.todo }, { key: "inProgress", label: "In Progress", color: STATUS_COLORS.inProgress }, { key: "inReview", label: "In Review", color: STATUS_COLORS.inReview }, { key: "done", label: "Done", color: STATUS_COLORS.done }];
-  const handleDrop = (toCol) => { if (!dragItem || dragItem.fromCol === toCol) { setDragItem(null); setDragOver(null); return; } const nk = { ...kanban }; nk[dragItem.fromCol] = nk[dragItem.fromCol].filter(t => t.id !== dragItem.task.id); nk[toCol] = [...nk[toCol], dragItem.task]; setKanban(nk); setDragItem(null); setDragOver(null); };
-  const handleCreate = () => { const nt = { id: "t" + Date.now(), ...form, created: new Date().toISOString().slice(0, 10) }; const nk = { ...kanban }; nk[form.column] = [...nk[form.column], nt]; setKanban(nk); setModal(false); setForm({ title: "", desc: "", agent: agents[0]?.name || "", priority: "medium", column: "todo" }); };
-  const saveEdit = () => { if (!editTask) return; const nk = { ...kanban }; nk[editTask.column] = nk[editTask.column].map(t => t.id === editTask.id ? { ...t, title: editTask.title, desc: editTask.desc, agent: editTask.agent, priority: editTask.priority } : t); setKanban(nk); setEditTask(null); };
+  const handleDrop = (toCol) => { if (!dragItem || dragItem.fromCol === toCol) { setDragItem(null); setDragOver(null); return; } const nk = { ...kanban }; nk[dragItem.fromCol] = nk[dragItem.fromCol].filter(t => t.id !== dragItem.task.id); nk[toCol] = [...nk[toCol], dragItem.task]; setKanban(nk); setDragItem(null); setDragOver(null); api('/kanban/sync', { method: 'POST', body: nk }); };
+  const handleCreate = () => { const nt = { id: "t" + Date.now(), ...form, created: new Date().toISOString().slice(0, 10) }; const nk = { ...kanban }; nk[form.column] = [...nk[form.column], nt]; setKanban(nk); setModal(false); setForm({ title: "", desc: "", agent: agents[0]?.name || "", priority: "medium", column: "todo" }); api('/kanban', { method: 'POST', body: { ...nt, column: form.column } }); };
+  const saveEdit = () => { if (!editTask) return; const nk = { ...kanban }; nk[editTask.column] = nk[editTask.column].map(t => t.id === editTask.id ? { ...t, title: editTask.title, desc: editTask.desc, agent: editTask.agent, priority: editTask.priority } : t); setKanban(nk); setEditTask(null); api(`/kanban/${editTask.id}`, { method: 'PUT', body: editTask }); };
   return (<div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Kanban Board</h1><Btn s={s} onClick={() => setModal(true)}>{I.plus} Create Task</Btn></div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16, alignItems: "start" }}>
@@ -239,7 +259,7 @@ function KanbanPage({ s, kanban, setKanban, agents }) {
           <div style={{ padding: "14px 14px 14px 18px", position: "relative" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}><span style={{ color: s.textDim }}>{I.grip}</span><span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: s.text }}>{task.title}</span></div>
             <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 10, lineHeight: 1.4, paddingLeft: 20 }}>{task.desc}</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 20, flexWrap: "wrap" }}><Badge text={task.priority} color={PRIORITY_COLORS[task.priority]} /><span style={{ fontSize: 11, color: s.textMuted }}>{task.agent}</span><div style={{ marginLeft: "auto", display: "flex", gap: 4 }}><button onClick={() => setEditTask({ ...task, column: col.key })} style={{ background: "none", border: "none", color: s.textMuted, cursor: "pointer", padding: 4 }}>{I.edit}</button><button onClick={() => { const nk = { ...kanban }; nk[col.key] = nk[col.key].filter(t => t.id !== task.id); setKanban(nk); }} style={{ background: "none", border: "none", color: ACCENT.red, cursor: "pointer", padding: 4, opacity: 0.6 }}>{I.trash}</button></div></div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, paddingLeft: 20, flexWrap: "wrap" }}><Badge text={task.priority} color={PRIORITY_COLORS[task.priority]} /><span style={{ fontSize: 11, color: s.textMuted }}>{task.agent}</span><div style={{ marginLeft: "auto", display: "flex", gap: 4 }}><button onClick={() => setEditTask({ ...task, column: col.key })} style={{ background: "none", border: "none", color: s.textMuted, cursor: "pointer", padding: 4 }}>{I.edit}</button><button onClick={() => { const nk = { ...kanban }; nk[col.key] = nk[col.key].filter(t => t.id !== task.id); setKanban(nk); api(`/kanban/${task.id}`, { method: 'DELETE' }); }} style={{ background: "none", border: "none", color: ACCENT.red, cursor: "pointer", padding: 4, opacity: 0.6 }}>{I.trash}</button></div></div>
           </div></div>))}</div>
       </div>))}
     </div>
@@ -261,11 +281,26 @@ function KanbanPage({ s, kanban, setKanban, agents }) {
   </div>);
 }
 
-function AgentsPage({ s, agents, setAgents }) {
+function AgentsPage({ s, agents, setAgents, a0Agents }) {
   const [sel, setSel] = useState(null); const [editing, setEditing] = useState(false); const [ec, setEc] = useState(""); const [addM, setAddM] = useState(false);
   const [na, setNa] = useState({ name: "", role: "", dept: "", desc: "" });
+  const [taskModal, setTaskModal] = useState(null); const [taskMsg, setTaskMsg] = useState(""); const [taskResp, setTaskResp] = useState(null); const [sending, setSending] = useState(false);
+  const addAgent = async () => {
+    const newAgent = { id: "a" + Date.now(), ...na, status: "idle", file: na.name.toLowerCase() + ".md" };
+    setAgents([...agents, newAgent]); setAddM(false); setNa({ name: "", role: "", dept: "", desc: "" });
+    await api('/agents', { method: 'POST', body: newAgent });
+  };
+  const deleteAgent = async (id) => { setAgents(agents.filter(a => a.id !== id)); setSel(null); await api(`/agents/${id}`, { method: 'DELETE' }); };
+  const saveAgent = async (updated) => { setAgents(agents.map(a => a.id === updated.id ? updated : a)); await api(`/agents/${updated.id}`, { method: 'PUT', body: updated }); };
+  const sendTask = async () => {
+    if (!taskMsg.trim()) return; setSending(true); setTaskResp(null);
+    const resp = await a0('message', { text: taskMsg, chat_id: null });
+    setTaskResp(resp); setSending(false);
+  };
   return (<div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Agent Registry</h1><Btn s={s} onClick={() => setAddM(true)}>{I.plus} Add Agent</Btn></div>
+    {a0Agents.length > 0 && <div style={{ marginBottom: 24 }}><div style={{ fontSize: 13, fontWeight: 700, color: s.textMuted, marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>Agent Zero Profiles</div><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>{a0Agents.map(p => (<div key={p.key} style={{ padding: "10px 18px", background: ACCENT.cyan + "10", border: `1px solid ${ACCENT.cyan}25`, borderRadius: 14, display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => { setTaskModal(p); setTaskMsg(""); setTaskResp(null); }}><div style={{ width: 28, height: 28, borderRadius: 10, background: `linear-gradient(135deg, ${ACCENT.cyan}40, ${ACCENT.purple}40)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: ACCENT.cyan }}>{p.label[0]}</div><span style={{ fontSize: 14, fontWeight: 600, color: s.text }}>{p.label}</span><span style={{ fontSize: 11, color: ACCENT.cyan, fontWeight: 600 }}>A0</span></div>))}</div></div>}
+    <div style={{ fontSize: 13, fontWeight: 700, color: s.textMuted, marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>BKE Agents</div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
       {agents.map(a => (<Card key={a.id} color={a.status === "active" ? ACCENT.green : ACCENT.amber} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} onClick={() => { setSel(a); setEc(a.desc); setEditing(false); }}>
         <div style={{ padding: "20px 20px 20px 22px" }}><div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 10 }}><div style={{ width: 42, height: 42, borderRadius: 14, background: `linear-gradient(135deg, ${ACCENT.cyan}30, ${ACCENT.purple}30)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 800, color: ACCENT.cyan, fontFamily: "'Space Grotesk'" }}>{a.name[0]}</div><div><div style={{ fontSize: 16, fontWeight: 700, color: s.text }}>{a.name}</div><div style={{ fontSize: 12, color: s.textMuted }}>{a.role}</div></div><div style={{ marginLeft: "auto" }}><StatusDot status={a.status} /></div></div><div style={{ display: "flex", gap: 8 }}><Badge text={a.dept} color={ACCENT.cyan} /><Badge text={a.status} color={a.status === "active" ? ACCENT.green : ACCENT.amber} /></div></div>
@@ -274,14 +309,20 @@ function AgentsPage({ s, agents, setAgents }) {
     <Modal open={!!sel} onClose={() => setSel(null)} title={sel?.name || ""} s={s}>{sel && (<>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}><Badge text={sel.role} color={ACCENT.cyan} /><Badge text={sel.dept} color={ACCENT.purple} /><Badge text={sel.status} color={sel.status === "active" ? ACCENT.green : ACCENT.amber} /></div>
       <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 12 }}>📄 {sel.file}</div>
-      {editing ? (<><textarea value={ec} onChange={e => setEc(e.target.value)} style={{ width: "100%", minHeight: 200, padding: 16, background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 14, color: s.text, fontSize: 14, fontFamily: "'JetBrains Mono', monospace", resize: "vertical", outline: "none", boxSizing: "border-box" }} /><div style={{ display: "flex", gap: 12, marginTop: 12 }}><Btn s={s} onClick={() => { setAgents(agents.map(a => a.id === sel.id ? { ...a, desc: ec } : a)); setEditing(false); setSel({ ...sel, desc: ec }); }}>Save</Btn><Btn s={s} variant="ghost" onClick={() => setEditing(false)}>Cancel</Btn></div></>) : (<><div style={{ padding: 16, background: s.bgInput, borderRadius: 14, fontSize: 14, color: s.text, lineHeight: 1.6, marginBottom: 16, whiteSpace: "pre-wrap" }}>{sel.desc}</div><div style={{ display: "flex", gap: 12 }}><Btn s={s} onClick={() => setEditing(true)}>{I.edit} Edit</Btn><Btn s={s} variant="danger" onClick={() => { setAgents(agents.filter(a => a.id !== sel.id)); setSel(null); }}>{I.trash} Delete</Btn></div></>)}
+      {editing ? (<><textarea value={ec} onChange={e => setEc(e.target.value)} style={{ width: "100%", minHeight: 200, padding: 16, background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 14, color: s.text, fontSize: 14, fontFamily: "'JetBrains Mono', monospace", resize: "vertical", outline: "none", boxSizing: "border-box" }} /><div style={{ display: "flex", gap: 12, marginTop: 12 }}><Btn s={s} onClick={() => { const updated = { ...sel, desc: ec }; saveAgent(updated); setEditing(false); setSel(updated); }}>Save</Btn><Btn s={s} variant="ghost" onClick={() => setEditing(false)}>Cancel</Btn></div></>) : (<><div style={{ padding: 16, background: s.bgInput, borderRadius: 14, fontSize: 14, color: s.text, lineHeight: 1.6, marginBottom: 16, whiteSpace: "pre-wrap" }}>{sel.desc}</div><div style={{ display: "flex", gap: 12 }}><Btn s={s} onClick={() => setEditing(true)}>{I.edit} Edit</Btn><Btn s={s} variant="danger" onClick={() => deleteAgent(sel.id)}>{I.trash} Delete</Btn></div></>)}
     </>)}</Modal>
     <Modal open={addM} onClose={() => setAddM(false)} title="Add Agent" s={s}>
       <Inp label="Name" value={na.name} onChange={e => setNa({ ...na, name: e.target.value })} s={s} placeholder="Agent name..." />
       <Inp label="Role" value={na.role} onChange={e => setNa({ ...na, role: e.target.value })} s={s} placeholder="e.g. Sales Specialist" />
       <Inp label="Department" value={na.dept} onChange={e => setNa({ ...na, dept: e.target.value })} s={s} placeholder="e.g. Sales" />
       <Inp label="Description" value={na.desc} onChange={e => setNa({ ...na, desc: e.target.value })} s={s} multiline placeholder="Capabilities..." />
-      <div style={{ display: "flex", gap: 12, marginTop: 8 }}><Btn s={s} onClick={() => { setAgents([...agents, { id: "a" + Date.now(), ...na, status: "idle", file: na.name.toLowerCase() + ".md" }]); setAddM(false); setNa({ name: "", role: "", dept: "", desc: "" }); }} style={{ flex: 1 }}>Add Agent</Btn><Btn s={s} variant="ghost" onClick={() => setAddM(false)}>Cancel</Btn></div>
+      <div style={{ display: "flex", gap: 12, marginTop: 8 }}><Btn s={s} onClick={addAgent} style={{ flex: 1 }}>Add Agent</Btn><Btn s={s} variant="ghost" onClick={() => setAddM(false)}>Cancel</Btn></div>
+    </Modal>
+    <Modal open={!!taskModal} onClose={() => setTaskModal(null)} title={`Send Task to ${taskModal?.label || ''}`} s={s}>
+      <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 16 }}>Send a message to Agent Zero using the <strong style={{ color: ACCENT.cyan }}>{taskModal?.label}</strong> profile.</div>
+      <textarea value={taskMsg} onChange={e => setTaskMsg(e.target.value)} placeholder="Describe the task..." style={{ width: "100%", minHeight: 120, padding: 16, background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 14, color: s.text, fontSize: 14, fontFamily: "'DM Sans', sans-serif", resize: "vertical", outline: "none", boxSizing: "border-box" }} />
+      <div style={{ display: "flex", gap: 12, marginTop: 12 }}><Btn s={s} onClick={sendTask} disabled={sending}>{sending ? "Sending..." : "Send Task"}</Btn><Btn s={s} variant="ghost" onClick={() => setTaskModal(null)}>Cancel</Btn></div>
+      {taskResp && <div style={{ marginTop: 16, padding: 16, background: s.bgInput, borderRadius: 14, fontSize: 13, color: s.text, lineHeight: 1.6, maxHeight: 300, overflow: "auto", whiteSpace: "pre-wrap", fontFamily: "'JetBrains Mono', monospace" }}>{taskResp.ok ? JSON.stringify(taskResp, null, 2) : `Error: ${taskResp.error || 'Unknown error'}`}</div>}
     </Modal>
   </div>);
 }
@@ -316,9 +357,9 @@ function SchedulerPage({ s, crons, setCrons, agents }) {
           <code style={{ fontSize: 12, color: ACCENT.cyan, fontFamily: "'JetBrains Mono', monospace", background: ACCENT.cyan + "10", padding: "4px 10px", borderRadius: 8, whiteSpace: "nowrap" }}>{cr.minute} {cr.hour} {cr.day} {cr.month} {cr.weekday}</code>
           <div style={{ fontSize: 11, color: s.textMuted, minWidth: 120 }}><div>Last: {cr.lastRun}</div><div>Next: {cr.nextRun}</div></div>
           <div style={{ display: "flex", gap: 4 }} onClick={e => e.stopPropagation()}>
-            <button onClick={() => setCrons(crons.map(c => c.id === cr.id ? { ...c, state: c.state === "disabled" ? "idle" : "disabled" } : c))} style={{ background: s.bgInput, border: "none", borderRadius: 10, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: cr.state === "disabled" ? ACCENT.green : ACCENT.amber }}>{cr.state === "disabled" ? "Enable" : "Disable"}</button>
+            <button onClick={async () => { const newState = cr.state === "disabled" ? "idle" : "disabled"; setCrons(crons.map(c => c.id === cr.id ? { ...c, state: newState } : c)); await api(`/crons/${cr.id}`, { method: 'PUT', body: { ...cr, state: newState } }); }} style={{ background: s.bgInput, border: "none", borderRadius: 10, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: cr.state === "disabled" ? ACCENT.green : ACCENT.amber }}>{cr.state === "disabled" ? "Enable" : "Disable"}</button>
             <button onClick={() => setEditCron({ ...cr })} style={{ background: "none", border: "none", color: s.textMuted, cursor: "pointer", padding: 6 }}>{I.edit}</button>
-            <button onClick={() => setCrons(crons.filter(c => c.id !== cr.id))} style={{ background: "none", border: "none", color: ACCENT.red, cursor: "pointer", padding: 6, opacity: 0.6 }}>{I.trash}</button>
+            <button onClick={async () => { setCrons(crons.filter(c => c.id !== cr.id)); await api(`/crons/${cr.id}`, { method: 'DELETE' }); }} style={{ background: "none", border: "none", color: ACCENT.red, cursor: "pointer", padding: 6, opacity: 0.6 }}>{I.trash}</button>
           </div>
         </div>
       </Card>))}
@@ -326,14 +367,14 @@ function SchedulerPage({ s, crons, setCrons, agents }) {
     <Modal open={modal} onClose={() => setModal(false)} title="Create New Task" s={s} wide>
       <div style={{ borderBottom: `1px solid ${s.border}`, marginBottom: 20 }} />
       <Fields data={form} setData={setForm} />
-      <div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}><Btn s={s} variant="ghost" onClick={() => setModal(false)}>Cancel</Btn><Btn s={s} onClick={() => { setCrons([...crons, { id: "c" + Date.now(), ...form, lastRun: "—", nextRun: "Pending" }]); setModal(false); setForm(empty); }}>Save</Btn></div>
+      <div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}><Btn s={s} variant="ghost" onClick={() => setModal(false)}>Cancel</Btn><Btn s={s} onClick={async () => { const nCron = { id: "c" + Date.now(), ...form, lastRun: "—", nextRun: "Pending" }; setCrons([...crons, nCron]); setModal(false); setForm(empty); await api('/crons', { method: 'POST', body: nCron }); }}>Save</Btn></div>
     </Modal>
-    <Modal open={!!editCron} onClose={() => setEditCron(null)} title="Edit Task" s={s} wide>{editCron && (<><div style={{ borderBottom: `1px solid ${s.border}`, marginBottom: 20 }} /><Fields data={editCron} setData={setEditCron} /><div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}><Btn s={s} variant="ghost" onClick={() => setEditCron(null)}>Cancel</Btn><Btn s={s} onClick={() => { setCrons(crons.map(c => c.id === editCron.id ? editCron : c)); setEditCron(null); }}>Save</Btn></div></>)}</Modal>
+    <Modal open={!!editCron} onClose={() => setEditCron(null)} title="Edit Task" s={s} wide>{editCron && (<><div style={{ borderBottom: `1px solid ${s.border}`, marginBottom: 20 }} /><Fields data={editCron} setData={setEditCron} /><div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}><Btn s={s} variant="ghost" onClick={() => setEditCron(null)}>Cancel</Btn><Btn s={s} onClick={async () => { setCrons(crons.map(c => c.id === editCron.id ? editCron : c)); setEditCron(null); await api(`/crons/${editCron.id}`, { method: 'PUT', body: editCron }); }}>Save</Btn></div></>)}</Modal>
     <Modal open={!!viewCron && !editCron} onClose={() => setViewCron(null)} title={viewCron?.name || ""} s={s}>{viewCron && (<>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}><Badge text={viewCron.state} color={STATE_COLORS[viewCron.state]} /><Badge text={viewCron.type} color={ACCENT.cyan} /><Badge text={viewCron.agent} color={ACCENT.purple} />{viewCron.project !== "No project" && <Badge text={viewCron.project} color={ACCENT.amber} />}</div>
       <div style={{ padding: 16, background: s.bgInput, borderRadius: 14, marginBottom: 12 }}><div style={{ fontSize: 14, color: s.text, lineHeight: 1.6 }}>{viewCron.desc}</div></div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}><div style={{ padding: 12, background: s.bgInput, borderRadius: 12 }}><div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4 }}>Schedule</div><code style={{ fontSize: 14, color: ACCENT.cyan, fontFamily: "'JetBrains Mono'" }}>{viewCron.minute} {viewCron.hour} {viewCron.day} {viewCron.month} {viewCron.weekday}</code></div><div style={{ padding: 12, background: s.bgInput, borderRadius: 12 }}><div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4 }}>Last Run</div><div style={{ fontSize: 14, color: s.text }}>{viewCron.lastRun}</div></div></div>
-      <div style={{ display: "flex", gap: 12 }}><Btn s={s} onClick={() => { setEditCron({ ...viewCron }); setViewCron(null); }}>{I.edit} Edit</Btn><Btn s={s} variant="success">{I.play} Run Now</Btn><Btn s={s} variant="danger" onClick={() => { setCrons(crons.filter(c => c.id !== viewCron.id)); setViewCron(null); }}>{I.trash} Delete</Btn></div>
+      <div style={{ display: "flex", gap: 12 }}><Btn s={s} onClick={() => { setEditCron({ ...viewCron }); setViewCron(null); }}>{I.edit} Edit</Btn><Btn s={s} variant="success" onClick={async () => { const r = await a0('message', { text: viewCron.desc || viewCron.name }); if (r?.ok) { const updated = { ...viewCron, lastRun: new Date().toLocaleString(), state: 'running' }; setCrons(crons.map(c => c.id === viewCron.id ? updated : c)); setViewCron(updated); } }}>{I.play} Run Now</Btn><Btn s={s} variant="danger" onClick={async () => { setCrons(crons.filter(c => c.id !== viewCron.id)); setViewCron(null); await api(`/crons/${viewCron.id}`, { method: 'DELETE' }); }}>{I.trash} Delete</Btn></div>
     </>)}</Modal>
   </div>);
 }
@@ -386,9 +427,15 @@ function OrgChartPage({ s }) {
 }
 
 // ─── SETTINGS ───
-function SettingsPage({ s, settings, setSettings, kanban, crons, agents, setKanban, setCrons, setAgents }) {
-  const [backupStatus, setBackupStatus] = useState(null); const [updateStatus, setUpdateStatus] = useState(null);
+function SettingsPage({ s, settings, setSettings, kanban, crons, agents, setKanban, setCrons, setAgents, services }) {
+  const [backupStatus, setBackupStatus] = useState(null); const [updateStatus, setUpdateStatus] = useState(null); const [saveStatus, setSaveStatus] = useState(null);
   const [backups, setBackups] = useState([{ id: "b1", date: "2026-02-26 08:00", size: "24 KB", label: "Auto-backup" }, { id: "b2", date: "2026-02-25 16:00", size: "22 KB", label: "Pre-update backup" }, { id: "b3", date: "2026-02-24 08:00", size: "19 KB", label: "Auto-backup" }]);
+
+  const saveSettings = async () => {
+    setSaveStatus("saving");
+    await api('/settings', { method: 'POST', body: settings });
+    setSaveStatus("saved"); setTimeout(() => setSaveStatus(null), 2000);
+  };
 
   const createBackup = () => {
     const data = { kanban, crons, agents, settings, timestamp: new Date().toISOString(), version: "2.0.0" };
@@ -405,7 +452,7 @@ function SettingsPage({ s, settings, setSettings, kanban, crons, agents, setKanb
       reader.readAsText(file); }; input.click();
   };
 
-  return (<div><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif", marginBottom: 28 }}>Settings</h1>
+  return (<div><div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 28 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Settings</h1><Btn s={s} onClick={saveSettings}>{saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "✓ Saved" : "Save Settings"}</Btn></div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: 20 }}>
       <Card color={ACCENT.cyan} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>Company</div><Inp label="Company Name" value={settings.companyName} onChange={e => setSettings({ ...settings, companyName: e.target.value })} s={s} /><Inp label="Company Title" value={settings.companyTitle} onChange={e => setSettings({ ...settings, companyTitle: e.target.value })} s={s} /><Inp label="Logo URL" value={settings.logoUrl} onChange={e => setSettings({ ...settings, logoUrl: e.target.value })} s={s} placeholder="https://..." /></div></Card>
       <Card color={ACCENT.purple} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>Kanban Columns</div>{settings.kanbanColumns.map((col, i) => (<div key={i} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}><input value={col} onChange={e => { const c = [...settings.kanbanColumns]; c[i] = e.target.value; setSettings({ ...settings, kanbanColumns: c }); }} style={{ flex: 1, padding: "10px 14px", background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 12, color: s.text, fontSize: 14, outline: "none" }} /><button onClick={() => setSettings({ ...settings, kanbanColumns: settings.kanbanColumns.filter((_, j) => j !== i) })} style={{ background: ACCENT.red + "15", border: "none", borderRadius: 10, padding: "8px 12px", cursor: "pointer", color: ACCENT.red }}>{I.trash}</button></div>))}<Btn s={s} variant="ghost" onClick={() => setSettings({ ...settings, kanbanColumns: [...settings.kanbanColumns, "New Column"] })} style={{ marginTop: 8 }}>{I.plus} Add Column</Btn></div></Card>
@@ -448,10 +495,36 @@ export default function SaltyOS() {
   const [dark, setDark] = useState(true); const [page, setPage] = useState("dashboard"); const [sidebarOpen, setSidebarOpen] = useState(true); const [time, setTime] = useState(new Date());
   const [kanban, setKanban] = useState(initialKanban); const [agents, setAgents] = useState(initialAgents); const [crons, setCrons] = useState(initialCrons);
   const [settings, setSettings] = useState({ companyName: "BKE Logistics", companyTitle: "Freight Brokerage Operations Hub", logoUrl: "", accentColor: ACCENT.cyan, kanbanColumns: ["Backlog", "To-Do", "In Progress", "In Review", "Done"], agentZeroUrl: "http://agent-zero:5000", n8nUrl: "http://n8n:5678", postizUrl: "http://postiz:5000", firecrawlUrl: "http://firecrawl:3002", gotenbergUrl: "http://gotenberg:3000", githubRepo: "bke-logistics/salty-os", githubBranch: "main" });
+  const [services, setServices] = useState({}); const [a0Agents, setA0Agents] = useState([]); const [a0Status, setA0Status] = useState(null); const [loaded, setLoaded] = useState(false);
   const s = makeS(dark);
-  useEffect(() => { const t = setInterval(() => setTime(new Date()), 1000); return () => clearInterval(t); }, []);
+
+  // ─── Load data from API on mount ───
+  useEffect(() => {
+    const load = async () => {
+      const [dbAgents, dbCrons, dbKanban, dbSettings, svc, a0Ag, a0Health] = await Promise.all([
+        api('/agents'), api('/crons'), api('/kanban'), api('/settings'),
+        api('/services'), a0('agents', { action: 'list' }), a0('health'),
+      ]);
+      if (dbAgents?.length) setAgents(dbAgents);
+      if (dbCrons?.length) setCrons(dbCrons);
+      if (dbKanban && Object.keys(dbKanban).length > 0 && dbKanban.backlog) setKanban(dbKanban);
+      if (dbSettings?.companyName) setSettings(dbSettings);
+      if (svc) setServices(svc);
+      if (a0Ag?.ok) setA0Agents(a0Ag.data);
+      if (a0Health) setA0Status(a0Health);
+      setLoaded(true);
+    };
+    load();
+    const t = setInterval(() => setTime(new Date()), 1000);
+    // Refresh services every 30s
+    const svcTimer = setInterval(async () => {
+      const svc = await api('/services');
+      if (svc) setServices(svc);
+    }, 30000);
+    return () => { clearInterval(t); clearInterval(svcTimer); };
+  }, []);
   const nav = [{ key: "dashboard", label: "Dashboard", icon: I.dashboard }, { key: "kanban", label: "Kanban", icon: I.kanban }, { key: "agents", label: "Agents", icon: I.agents }, { key: "scheduler", label: "Scheduler", icon: I.scheduler }, { key: "deliverables", label: "Deliverables", icon: I.deliverables }, { key: "logs", label: "Activity Logs", icon: I.logs }, { key: "org", label: "Org Chart", icon: I.org }, { key: "settings", label: "Settings", icon: I.settings }];
-  const renderPage = () => { switch (page) { case "dashboard": return <DashboardPage s={s} kanban={kanban} crons={crons} setPage={setPage} />; case "kanban": return <KanbanPage s={s} kanban={kanban} setKanban={setKanban} agents={agents} />; case "agents": return <AgentsPage s={s} agents={agents} setAgents={setAgents} />; case "scheduler": return <SchedulerPage s={s} crons={crons} setCrons={setCrons} agents={agents} />; case "deliverables": return <DeliverablesPage s={s} />; case "logs": return <LogsPage s={s} />; case "org": return <OrgChartPage s={s} />; case "settings": return <SettingsPage s={s} settings={settings} setSettings={setSettings} kanban={kanban} crons={crons} agents={agents} setKanban={setKanban} setCrons={setCrons} setAgents={setAgents} />; default: return <DashboardPage s={s} kanban={kanban} crons={crons} setPage={setPage} />; } };
+  const renderPage = () => { switch (page) { case "dashboard": return <DashboardPage s={s} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; case "kanban": return <KanbanPage s={s} kanban={kanban} setKanban={setKanban} agents={agents} />; case "agents": return <AgentsPage s={s} agents={agents} setAgents={setAgents} a0Agents={a0Agents} />; case "scheduler": return <SchedulerPage s={s} crons={crons} setCrons={setCrons} agents={agents} />; case "deliverables": return <DeliverablesPage s={s} />; case "logs": return <LogsPage s={s} />; case "org": return <OrgChartPage s={s} />; case "settings": return <SettingsPage s={s} settings={settings} setSettings={setSettings} kanban={kanban} crons={crons} agents={agents} setKanban={setKanban} setCrons={setCrons} setAgents={setAgents} services={services} />; default: return <DashboardPage s={s} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; } };
 
   return (<div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans', sans-serif", background: s.bg, color: s.text, overflow: "hidden", transition: "all 0.4s ease" }}>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
