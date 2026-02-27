@@ -12,7 +12,7 @@ const ACCENT = {
 };
 
 const STATUS_COLORS = { backlog: "#64748b", todo: "#00E5FF", inProgress: "#FFB300", inReview: "#B388FF", done: "#00E676" };
-const PRIORITY_COLORS = { critical: "#FF5252", high: "#FFAB40", medium: "#FFB300", low: "#00E676" };
+const PRIORITY_COLORS = { critical: "#FF5252", high: "#FFAB40", medium: "#4FC3F7", low: "#00E676" };
 const STATE_COLORS = { idle: "#00E5FF", running: "#00E676", disabled: "#64748b", error: "#FF5252" };
 const STATE_DESC = { idle: "Ready to run", running: "Currently executing", disabled: "Paused — will not execute", error: "Failed — check logs" };
 
@@ -175,10 +175,10 @@ function Sel({ label, hint, value, onChange, options, s }) {
   </div>);
 }
 
-function Btn({ children, onClick, variant = "primary", s, style: st = {} }) {
+function Btn({ children, onClick, variant = "primary", s, accent = ACCENT.cyan, style: st = {} }) {
   const [h, setH] = useState(false);
   const base = { padding: "10px 20px", borderRadius: 14, border: "none", fontSize: 14, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", transition: "all 0.3s", display: "inline-flex", alignItems: "center", gap: 8, transform: h ? "scale(1.03)" : "none" };
-  const v = { primary: { background: ACCENT.cyan, color: "#0a0e17" }, ghost: { background: "transparent", color: s?.textMuted, border: `1px solid ${s?.border}` }, danger: { background: ACCENT.red + "20", color: ACCENT.red, border: `1px solid ${ACCENT.red}30` }, success: { background: ACCENT.green + "20", color: ACCENT.green, border: `1px solid ${ACCENT.green}30` } };
+  const v = { primary: { background: accent, color: "#0a0e17" }, ghost: { background: "transparent", color: s?.textMuted, border: `1px solid ${s?.border}` }, danger: { background: ACCENT.red + "20", color: ACCENT.red, border: `1px solid ${ACCENT.red}30` }, success: { background: ACCENT.green + "20", color: ACCENT.green, border: `1px solid ${ACCENT.green}30` } };
   return <button onMouseEnter={() => setH(true)} onMouseLeave={() => setH(false)} onClick={onClick} style={{ ...base, ...v[variant], ...st }}>{children}</button>;
 }
 
@@ -224,7 +224,7 @@ function CronFields({ minute, hour, day, month, weekday, onChange, s }) {
 // ═════════════════════════════════════════
 // PAGES
 // ═════════════════════════════════════════
-function DashboardPage({ s, kanban, crons, agents, services, a0Status, setPage }) {
+function DashboardPage({ s, accent, kanban, crons, agents, services, a0Status, setPage }) {
   const c = { backlog: kanban.backlog.length, todo: kanban.todo.length, inProgress: kanban.inProgress.length, inReview: kanban.inReview.length, done: kanban.done.length };
   const total = Object.values(c).reduce((a, b) => a + b, 0);
   const stats = [{ l: "Total Tasks", v: total, c: ACCENT.cyan, i: I.kanban }, { l: "Cron Jobs", v: crons.filter(x => x.state !== "disabled").length, c: ACCENT.amber, i: I.scheduler }, { l: "Active Agents", v: agents.filter(a => a.status === "active").length, c: ACCENT.green, i: I.agents }, { l: "In Progress", v: c.inProgress, c: ACCENT.purple, i: I.bolt }];
@@ -242,19 +242,32 @@ function DashboardPage({ s, kanban, crons, agents, services, a0Status, setPage }
   </div>);
 }
 
-function KanbanPage({ s, kanban, setKanban, agents }) {
+function KanbanPage({ s, accent, settings, kanban, setKanban, agents }) {
   const [modal, setModal] = useState(false); const [dragOver, setDragOver] = useState(null); const [dragItem, setDragItem] = useState(null);
   const [form, setForm] = useState({ title: "", desc: "", agent: agents[0]?.name || "", priority: "medium", column: "todo" }); const [editTask, setEditTask] = useState(null);
-  const cols = [{ key: "backlog", label: "Backlog", color: STATUS_COLORS.backlog }, { key: "todo", label: "To-Do", color: STATUS_COLORS.todo }, { key: "inProgress", label: "In Progress", color: STATUS_COLORS.inProgress }, { key: "inReview", label: "In Review", color: STATUS_COLORS.inReview }, { key: "done", label: "Done", color: STATUS_COLORS.done }];
-  const handleDrop = (toCol) => { if (!dragItem || dragItem.fromCol === toCol) { setDragItem(null); setDragOver(null); return; } const nk = { ...kanban }; nk[dragItem.fromCol] = nk[dragItem.fromCol].filter(t => t.id !== dragItem.task.id); nk[toCol] = [...nk[toCol], dragItem.task]; setKanban(nk); setDragItem(null); setDragOver(null); api('/kanban/sync', { method: 'POST', body: nk }); };
-  const handleCreate = () => { const nt = { id: "t" + Date.now(), ...form, created: new Date().toISOString().slice(0, 10) }; const nk = { ...kanban }; nk[form.column] = [...nk[form.column], nt]; setKanban(nk); setModal(false); setForm({ title: "", desc: "", agent: agents[0]?.name || "", priority: "medium", column: "todo" }); api('/kanban', { method: 'POST', body: { ...nt, column: form.column } }); };
-  const saveEdit = () => { if (!editTask) return; const nk = { ...kanban }; nk[editTask.column] = nk[editTask.column].map(t => t.id === editTask.id ? { ...t, title: editTask.title, desc: editTask.desc, agent: editTask.agent, priority: editTask.priority } : t); setKanban(nk); setEditTask(null); api(`/kanban/${editTask.id}`, { method: 'PUT', body: editTask }); };
+  const baseCols = [
+    { key: "backlog", defLabel: "Backlog", color: STATUS_COLORS.backlog },
+    { key: "todo", defLabel: "To-Do", color: STATUS_COLORS.todo },
+    { key: "inProgress", defLabel: "In Progress", color: STATUS_COLORS.inProgress },
+    { key: "inReview", defLabel: "In Review", color: STATUS_COLORS.inReview },
+    { key: "done", defLabel: "Done", color: STATUS_COLORS.done },
+  ];
+  const sc = settings?.kanbanColumns;
+  let cols = baseCols.map(c => ({ key: c.key, label: c.defLabel, color: c.color }));
+  if (Array.isArray(sc)) {
+    cols = baseCols.map((c, i) => ({ key: c.key, label: sc[i] || c.defLabel, color: c.color }));
+  } else if (sc && typeof sc === "object") {
+    cols = baseCols.filter(c => sc[c.key]?.enabled !== false).map(c => ({ key: c.key, label: sc[c.key]?.label || c.defLabel, color: c.color }));
+  }
+    const handleDrop = (toCol) => { if (!dragItem || dragItem.fromCol === toCol) { setDragItem(null); setDragOver(null); return; } const nk = { ...kanban }; nk[dragItem.fromCol] = nk[dragItem.fromCol].filter(t => t.id !== dragItem.task.id); nk[toCol] = [...nk[toCol], dragItem.task]; setKanban(nk); setDragItem(null); setDragOver(null); const tasks = Object.entries(nk).flatMap(([status, arr]) => (arr || []).map(t => ({ ...t, status }))); api("/kanban/sync", { method: "POST", body: { tasks } }); };
+    const handleCreate = () => { const nt = { id: "t" + Date.now(), ...form, created: new Date().toISOString().slice(0, 10) }; const nk = { ...kanban }; nk[form.column] = [...nk[form.column], nt]; setKanban(nk); setModal(false); setForm({ title: "", desc: "", agent: agents[0]?.name || "", priority: "medium", column: "todo" }); api("/kanban", { method: "POST", body: { id: nt.id, title: nt.title, description: nt.desc || "", status: form.column, priority: nt.priority, agent: nt.agent || "", tags: [], due_date: "" } }); };
+    const saveEdit = () => { if (!editTask) return; const nk = { ...kanban }; nk[editTask.column] = nk[editTask.column].map(t => t.id === editTask.id ? { ...t, title: editTask.title, desc: editTask.desc, agent: editTask.agent, priority: editTask.priority } : t); setKanban(nk); setEditTask(null); api(`/kanban/${editTask.id}`, { method: "PUT", body: { title: editTask.title, description: editTask.desc || "", status: editTask.column, priority: editTask.priority, agent: editTask.agent || "" } }); };
   return (<div>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Kanban Board</h1><Btn s={s} onClick={() => setModal(true)}>{I.plus} Create Task</Btn></div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Kanban Board</h1><Btn s={s} accent={accent} onClick={() => setModal(true)}>{I.plus} Create Task</Btn></div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 16, alignItems: "start" }}>
       {cols.map(col => (<div key={col.key} onDragOver={e => { e.preventDefault(); setDragOver(col.key); }} onDragLeave={() => setDragOver(null)} onDrop={() => handleDrop(col.key)} style={{ background: dragOver === col.key ? col.color + "10" : s.bgCard, borderRadius: 20, padding: 16, border: `1px solid ${dragOver === col.key ? col.color + "40" : s.border}`, boxShadow: s.shadow, transition: "all 0.3s", minHeight: 300 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 16, padding: "0 4px" }}><div style={{ width: 10, height: 10, borderRadius: "50%", background: col.color }} /><span style={{ fontSize: 14, fontWeight: 700, color: s.text }}>{col.label}</span><span style={{ marginLeft: "auto", fontSize: 13, fontWeight: 700, color: s.textMuted, background: s.bgInput, borderRadius: 8, padding: "2px 10px" }}>{kanban[col.key].length}</span></div>
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{kanban[col.key].map(task => (<div key={task.id} draggable onDragStart={() => setDragItem({ task, fromCol: col.key })} style={{ position: "relative", background: s.bgInput, borderRadius: 16, overflow: "hidden", border: `1px solid ${s.border}`, cursor: "grab" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>{kanban[col.key].map(task => (<div key={task.id} draggable onDragStart={() => setDragItem({ task, fromCol: col.key })} style={{ position: "relative", background: `linear-gradient(90deg, ${col.color}24 0%, ${col.color}00 70%), ${s.bgInput}`, borderRadius: 16, overflow: "hidden", border: `1px solid ${s.border}`, cursor: "grab" }}>
           <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, background: PRIORITY_COLORS[task.priority] }} />
           <div style={{ padding: "14px 14px 14px 18px", position: "relative" }}>
             <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}><span style={{ color: s.textDim }}>{I.grip}</span><span style={{ flex: 1, fontSize: 13, fontWeight: 700, color: s.text }}>{task.title}</span></div>
@@ -269,19 +282,19 @@ function KanbanPage({ s, kanban, setKanban, agents }) {
       <Sel label="Assign Agent" value={form.agent} onChange={e => setForm({ ...form, agent: e.target.value })} s={s} options={agents.map(a => ({ value: a.name, label: `${a.name} — ${a.role}` }))} />
       <Sel label="Priority" value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })} s={s} options={[{ value: "critical", label: "🔴 Critical" }, { value: "high", label: "🟠 High" }, { value: "medium", label: "🟡 Medium" }, { value: "low", label: "🟢 Low" }]} />
       <Sel label="Column" value={form.column} onChange={e => setForm({ ...form, column: e.target.value })} s={s} options={cols.map(c => ({ value: c.key, label: c.label }))} />
-      <div style={{ display: "flex", gap: 12, marginTop: 8 }}><Btn s={s} onClick={handleCreate} style={{ flex: 1 }}>Create Task</Btn><Btn s={s} variant="ghost" onClick={() => setModal(false)}>Cancel</Btn></div>
+      <div style={{ display: "flex", gap: 12, marginTop: 8 }}><Btn s={s} accent={accent} onClick={handleCreate} style={{ flex: 1 }}>Create Task</Btn><Btn s={s} accent={accent} variant="ghost" onClick={() => setModal(false)}>Cancel</Btn></div>
     </Modal>
     <Modal open={!!editTask} onClose={() => setEditTask(null)} title="Edit Task" s={s}>{editTask && (<>
       <Inp label="Title" value={editTask.title} onChange={e => setEditTask({ ...editTask, title: e.target.value })} s={s} />
       <Inp label="Description" value={editTask.desc} onChange={e => setEditTask({ ...editTask, desc: e.target.value })} s={s} multiline />
       <Sel label="Assign Agent" value={editTask.agent} onChange={e => setEditTask({ ...editTask, agent: e.target.value })} s={s} options={agents.map(a => ({ value: a.name, label: `${a.name} — ${a.role}` }))} />
       <Sel label="Priority" value={editTask.priority} onChange={e => setEditTask({ ...editTask, priority: e.target.value })} s={s} options={[{ value: "critical", label: "🔴 Critical" }, { value: "high", label: "🟠 High" }, { value: "medium", label: "🟡 Medium" }, { value: "low", label: "🟢 Low" }]} />
-      <div style={{ display: "flex", gap: 12, marginTop: 8 }}><Btn s={s} onClick={saveEdit} style={{ flex: 1 }}>Save Changes</Btn><Btn s={s} variant="ghost" onClick={() => setEditTask(null)}>Cancel</Btn></div>
+      <div style={{ display: "flex", gap: 12, marginTop: 8 }}><Btn s={s} accent={accent} onClick={saveEdit} style={{ flex: 1 }}>Save Changes</Btn><Btn s={s} accent={accent} variant="ghost" onClick={() => setEditTask(null)}>Cancel</Btn></div>
     </>)}</Modal>
   </div>);
 }
 
-function AgentsPage({ s, agents, setAgents, a0Agents }) {
+function AgentsPage({ s, accent, agents, setAgents, a0Agents }) {
   const [sel, setSel] = useState(null); const [editing, setEditing] = useState(false); const [ec, setEc] = useState(""); const [addM, setAddM] = useState(false);
   const [na, setNa] = useState({ name: "", role: "", dept: "", desc: "" });
   const [taskModal, setTaskModal] = useState(null); const [taskMsg, setTaskMsg] = useState(""); const [taskResp, setTaskResp] = useState(null); const [sending, setSending] = useState(false);
@@ -298,8 +311,8 @@ function AgentsPage({ s, agents, setAgents, a0Agents }) {
     setTaskResp(resp); setSending(false);
   };
   return (<div>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Agent Registry</h1><Btn s={s} onClick={() => setAddM(true)}>{I.plus} Add Agent</Btn></div>
-    {a0Agents.length > 0 && <div style={{ marginBottom: 24 }}><div style={{ fontSize: 13, fontWeight: 700, color: s.textMuted, marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>Agent Zero Profiles</div><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>{a0Agents.map(p => (<div key={p.key} style={{ padding: "10px 18px", background: ACCENT.cyan + "10", border: `1px solid ${ACCENT.cyan}25`, borderRadius: 14, display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => { setTaskModal(p); setTaskMsg(""); setTaskResp(null); }}><div style={{ width: 28, height: 28, borderRadius: 10, background: `linear-gradient(135deg, ${ACCENT.cyan}40, ${ACCENT.purple}40)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: ACCENT.cyan }}>{p.label[0]}</div><span style={{ fontSize: 14, fontWeight: 600, color: s.text }}>{p.label}</span><span style={{ fontSize: 11, color: ACCENT.cyan, fontWeight: 600 }}>A0</span></div>))}</div></div>}
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Agent Registry</h1><Btn s={s} accent={accent} onClick={() => setAddM(true)}>{I.plus} Add Agent</Btn></div>
+    {a0Agents.length > 0 && <div style={{ marginBottom: 24 }}><div style={{ fontSize: 13, fontWeight: 700, color: s.textMuted, marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>Agent Zero Profiles</div><div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>{a0Agents.map(p => (<div key={p.key} style={{ padding: "10px 18px", background: accent + "10", border: `1px solid ${ACCENT.cyan}25`, borderRadius: 14, display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }} onClick={() => { setTaskModal(p); setTaskMsg(""); setTaskResp(null); }}><div style={{ width: 28, height: 28, borderRadius: 10, background: `linear-gradient(135deg, ${ACCENT.cyan}40, ${ACCENT.purple}40)`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12, fontWeight: 800, color: ACCENT.cyan }}>{p.label[0]}</div><span style={{ fontSize: 14, fontWeight: 600, color: s.text }}>{p.label}</span><span style={{ fontSize: 11, color: ACCENT.cyan, fontWeight: 600 }}>A0</span></div>))}</div></div>}
     <div style={{ fontSize: 13, fontWeight: 700, color: s.textMuted, marginBottom: 12, textTransform: "uppercase", letterSpacing: 1 }}>BKE Agents</div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: 16 }}>
       {agents.map(a => (<Card key={a.id} color={a.status === "active" ? ACCENT.green : ACCENT.amber} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} onClick={() => { setSel(a); setEc(a.desc); setEditing(false); }}>
@@ -309,26 +322,26 @@ function AgentsPage({ s, agents, setAgents, a0Agents }) {
     <Modal open={!!sel} onClose={() => setSel(null)} title={sel?.name || ""} s={s}>{sel && (<>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}><Badge text={sel.role} color={ACCENT.cyan} /><Badge text={sel.dept} color={ACCENT.purple} /><Badge text={sel.status} color={sel.status === "active" ? ACCENT.green : ACCENT.amber} /></div>
       <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 12 }}>📄 {sel.file}</div>
-      {editing ? (<><textarea value={ec} onChange={e => setEc(e.target.value)} style={{ width: "100%", minHeight: 200, padding: 16, background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 14, color: s.text, fontSize: 14, fontFamily: "'JetBrains Mono', monospace", resize: "vertical", outline: "none", boxSizing: "border-box" }} /><div style={{ display: "flex", gap: 12, marginTop: 12 }}><Btn s={s} onClick={() => { const updated = { ...sel, desc: ec }; saveAgent(updated); setEditing(false); setSel(updated); }}>Save</Btn><Btn s={s} variant="ghost" onClick={() => setEditing(false)}>Cancel</Btn></div></>) : (<><div style={{ padding: 16, background: s.bgInput, borderRadius: 14, fontSize: 14, color: s.text, lineHeight: 1.6, marginBottom: 16, whiteSpace: "pre-wrap" }}>{sel.desc}</div><div style={{ display: "flex", gap: 12 }}><Btn s={s} onClick={() => setEditing(true)}>{I.edit} Edit</Btn><Btn s={s} variant="danger" onClick={() => deleteAgent(sel.id)}>{I.trash} Delete</Btn></div></>)}
+      {editing ? (<><textarea value={ec} onChange={e => setEc(e.target.value)} style={{ width: "100%", minHeight: 200, padding: 16, background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 14, color: s.text, fontSize: 14, fontFamily: "'JetBrains Mono', monospace", resize: "vertical", outline: "none", boxSizing: "border-box" }} /><div style={{ display: "flex", gap: 12, marginTop: 12 }}><Btn s={s} accent={accent} onClick={() => { const updated = { ...sel, desc: ec }; saveAgent(updated); setEditing(false); setSel(updated); }}>Save</Btn><Btn s={s} accent={accent} variant="ghost" onClick={() => setEditing(false)}>Cancel</Btn></div></>) : (<><div style={{ padding: 16, background: s.bgInput, borderRadius: 14, fontSize: 14, color: s.text, lineHeight: 1.6, marginBottom: 16, whiteSpace: "pre-wrap" }}>{sel.desc}</div><div style={{ display: "flex", gap: 12 }}><Btn s={s} accent={accent} onClick={() => setEditing(true)}>{I.edit} Edit</Btn><Btn s={s} accent={accent} variant="danger" onClick={() => deleteAgent(sel.id)}>{I.trash} Delete</Btn></div></>)}
     </>)}</Modal>
     <Modal open={addM} onClose={() => setAddM(false)} title="Add Agent" s={s}>
       <Inp label="Name" value={na.name} onChange={e => setNa({ ...na, name: e.target.value })} s={s} placeholder="Agent name..." />
       <Inp label="Role" value={na.role} onChange={e => setNa({ ...na, role: e.target.value })} s={s} placeholder="e.g. Sales Specialist" />
       <Inp label="Department" value={na.dept} onChange={e => setNa({ ...na, dept: e.target.value })} s={s} placeholder="e.g. Sales" />
       <Inp label="Description" value={na.desc} onChange={e => setNa({ ...na, desc: e.target.value })} s={s} multiline placeholder="Capabilities..." />
-      <div style={{ display: "flex", gap: 12, marginTop: 8 }}><Btn s={s} onClick={addAgent} style={{ flex: 1 }}>Add Agent</Btn><Btn s={s} variant="ghost" onClick={() => setAddM(false)}>Cancel</Btn></div>
+      <div style={{ display: "flex", gap: 12, marginTop: 8 }}><Btn s={s} accent={accent} onClick={addAgent} style={{ flex: 1 }}>Add Agent</Btn><Btn s={s} accent={accent} variant="ghost" onClick={() => setAddM(false)}>Cancel</Btn></div>
     </Modal>
     <Modal open={!!taskModal} onClose={() => setTaskModal(null)} title={`Send Task to ${taskModal?.label || ''}`} s={s}>
       <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 16 }}>Send a message to Agent Zero using the <strong style={{ color: ACCENT.cyan }}>{taskModal?.label}</strong> profile.</div>
       <textarea value={taskMsg} onChange={e => setTaskMsg(e.target.value)} placeholder="Describe the task..." style={{ width: "100%", minHeight: 120, padding: 16, background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 14, color: s.text, fontSize: 14, fontFamily: "'DM Sans', sans-serif", resize: "vertical", outline: "none", boxSizing: "border-box" }} />
-      <div style={{ display: "flex", gap: 12, marginTop: 12 }}><Btn s={s} onClick={sendTask} disabled={sending}>{sending ? "Sending..." : "Send Task"}</Btn><Btn s={s} variant="ghost" onClick={() => setTaskModal(null)}>Cancel</Btn></div>
+      <div style={{ display: "flex", gap: 12, marginTop: 12 }}><Btn s={s} accent={accent} onClick={sendTask} disabled={sending}>{sending ? "Sending..." : "Send Task"}</Btn><Btn s={s} accent={accent} variant="ghost" onClick={() => setTaskModal(null)}>Cancel</Btn></div>
       {taskResp && <div style={{ marginTop: 16, padding: 16, background: s.bgInput, borderRadius: 14, fontSize: 13, color: s.text, lineHeight: 1.6, maxHeight: 300, overflow: "auto", whiteSpace: "pre-wrap", fontFamily: "'JetBrains Mono', monospace" }}>{taskResp.ok ? JSON.stringify(taskResp, null, 2) : `Error: ${taskResp.error || 'Unknown error'}`}</div>}
     </Modal>
   </div>);
 }
 
 // ─── SCHEDULER (Agent Zero Style) ───
-function SchedulerPage({ s, crons, setCrons, agents }) {
+function SchedulerPage({ s, accent, crons, setCrons, agents }) {
   const [modal, setModal] = useState(false); const [editCron, setEditCron] = useState(null); const [viewCron, setViewCron] = useState(null);
   const empty = { name: "", type: "scheduled", project: "No project", state: "idle", minute: "*", hour: "*", day: "*", month: "*", weekday: "*", agent: agents[0]?.name || "", desc: "" };
   const [form, setForm] = useState(empty);
@@ -346,7 +359,7 @@ function SchedulerPage({ s, crons, setCrons, agents }) {
   </>);
 
   return (<div>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Task Scheduler</h1><Btn s={s} onClick={() => setModal(true)}>{I.plus} Create Task</Btn></div>
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Task Scheduler</h1><Btn s={s} accent={accent} onClick={() => setModal(true)}>{I.plus} Create Task</Btn></div>
     <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 24 }}>Manage scheduled tasks and automated processes for Agent Zero.</div>
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {crons.map(cr => (<Card key={cr.id} color={STATE_COLORS[cr.state]} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} onClick={() => setViewCron(cr)}>
@@ -354,7 +367,7 @@ function SchedulerPage({ s, crons, setCrons, agents }) {
           <StatusDot status={cr.state === "idle" ? "active" : cr.state} />
           <div style={{ flex: 1, minWidth: 180 }}><div style={{ fontSize: 15, fontWeight: 700, color: s.text }}>{cr.name}</div><div style={{ fontSize: 12, color: s.textMuted, marginTop: 2 }}>{cr.desc}</div></div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}><Badge text={cr.state} color={STATE_COLORS[cr.state]} /><Badge text={cr.type} color={ACCENT.cyan} /><Badge text={cr.agent} color={ACCENT.purple} />{cr.project !== "No project" && <Badge text={cr.project} color={ACCENT.amber} />}</div>
-          <code style={{ fontSize: 12, color: ACCENT.cyan, fontFamily: "'JetBrains Mono', monospace", background: ACCENT.cyan + "10", padding: "4px 10px", borderRadius: 8, whiteSpace: "nowrap" }}>{cr.minute} {cr.hour} {cr.day} {cr.month} {cr.weekday}</code>
+          <code style={{ fontSize: 12, color: ACCENT.cyan, fontFamily: "'JetBrains Mono', monospace", background: accent + "10", padding: "4px 10px", borderRadius: 8, whiteSpace: "nowrap" }}>{cr.minute} {cr.hour} {cr.day} {cr.month} {cr.weekday}</code>
           <div style={{ fontSize: 11, color: s.textMuted, minWidth: 120 }}><div>Last: {cr.lastRun}</div><div>Next: {cr.nextRun}</div></div>
           <div style={{ display: "flex", gap: 4 }} onClick={e => e.stopPropagation()}>
             <button onClick={async () => { const newState = cr.state === "disabled" ? "idle" : "disabled"; setCrons(crons.map(c => c.id === cr.id ? { ...c, state: newState } : c)); await api(`/crons/${cr.id}`, { method: 'PUT', body: { ...cr, state: newState } }); }} style={{ background: s.bgInput, border: "none", borderRadius: 10, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: cr.state === "disabled" ? ACCENT.green : ACCENT.amber }}>{cr.state === "disabled" ? "Enable" : "Disable"}</button>
@@ -367,21 +380,23 @@ function SchedulerPage({ s, crons, setCrons, agents }) {
     <Modal open={modal} onClose={() => setModal(false)} title="Create New Task" s={s} wide>
       <div style={{ borderBottom: `1px solid ${s.border}`, marginBottom: 20 }} />
       <Fields data={form} setData={setForm} />
-      <div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}><Btn s={s} variant="ghost" onClick={() => setModal(false)}>Cancel</Btn><Btn s={s} onClick={async () => { const nCron = { id: "c" + Date.now(), ...form, lastRun: "—", nextRun: "Pending" }; setCrons([...crons, nCron]); setModal(false); setForm(empty); await api('/crons', { method: 'POST', body: nCron }); }}>Save</Btn></div>
+      <div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}><Btn s={s} accent={accent} variant="ghost" onClick={() => setModal(false)}>Cancel</Btn><Btn s={s} accent={accent} onClick={async () => { const nCron = { id: "c" + Date.now(), ...form, lastRun: "—", nextRun: "Pending" }; setCrons([...crons, nCron]); setModal(false); setForm(empty); await api('/crons', { method: 'POST', body: nCron }); }}>Save</Btn></div>
     </Modal>
-    <Modal open={!!editCron} onClose={() => setEditCron(null)} title="Edit Task" s={s} wide>{editCron && (<><div style={{ borderBottom: `1px solid ${s.border}`, marginBottom: 20 }} /><Fields data={editCron} setData={setEditCron} /><div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}><Btn s={s} variant="ghost" onClick={() => setEditCron(null)}>Cancel</Btn><Btn s={s} onClick={async () => { setCrons(crons.map(c => c.id === editCron.id ? editCron : c)); setEditCron(null); await api(`/crons/${editCron.id}`, { method: 'PUT', body: editCron }); }}>Save</Btn></div></>)}</Modal>
+    <Modal open={!!editCron} onClose={() => setEditCron(null)} title="Edit Task" s={s} wide>{editCron && (<><div style={{ borderBottom: `1px solid ${s.border}`, marginBottom: 20 }} /><Fields data={editCron} setData={setEditCron} /><div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}><Btn s={s} accent={accent} variant="ghost" onClick={() => setEditCron(null)}>Cancel</Btn><Btn s={s} accent={accent} onClick={async () => { setCrons(crons.map(c => c.id === editCron.id ? editCron : c)); setEditCron(null); await api(`/crons/${editCron.id}`, { method: 'PUT', body: editCron }); }}>Save</Btn></div></>)}</Modal>
     <Modal open={!!viewCron && !editCron} onClose={() => setViewCron(null)} title={viewCron?.name || ""} s={s}>{viewCron && (<>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}><Badge text={viewCron.state} color={STATE_COLORS[viewCron.state]} /><Badge text={viewCron.type} color={ACCENT.cyan} /><Badge text={viewCron.agent} color={ACCENT.purple} />{viewCron.project !== "No project" && <Badge text={viewCron.project} color={ACCENT.amber} />}</div>
       <div style={{ padding: 16, background: s.bgInput, borderRadius: 14, marginBottom: 12 }}><div style={{ fontSize: 14, color: s.text, lineHeight: 1.6 }}>{viewCron.desc}</div></div>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 16 }}><div style={{ padding: 12, background: s.bgInput, borderRadius: 12 }}><div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4 }}>Schedule</div><code style={{ fontSize: 14, color: ACCENT.cyan, fontFamily: "'JetBrains Mono'" }}>{viewCron.minute} {viewCron.hour} {viewCron.day} {viewCron.month} {viewCron.weekday}</code></div><div style={{ padding: 12, background: s.bgInput, borderRadius: 12 }}><div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4 }}>Last Run</div><div style={{ fontSize: 14, color: s.text }}>{viewCron.lastRun}</div></div></div>
-      <div style={{ display: "flex", gap: 12 }}><Btn s={s} onClick={() => { setEditCron({ ...viewCron }); setViewCron(null); }}>{I.edit} Edit</Btn><Btn s={s} variant="success" onClick={async () => { const r = await a0('message', { text: viewCron.desc || viewCron.name }); if (r?.ok) { const updated = { ...viewCron, lastRun: new Date().toLocaleString(), state: 'running' }; setCrons(crons.map(c => c.id === viewCron.id ? updated : c)); setViewCron(updated); } }}>{I.play} Run Now</Btn><Btn s={s} variant="danger" onClick={async () => { setCrons(crons.filter(c => c.id !== viewCron.id)); setViewCron(null); await api(`/crons/${viewCron.id}`, { method: 'DELETE' }); }}>{I.trash} Delete</Btn></div>
+      <div style={{ display: "flex", gap: 12 }}><Btn s={s} accent={accent} onClick={() => { setEditCron({ ...viewCron }); setViewCron(null); }}>{I.edit} Edit</Btn><Btn s={s} accent={accent} variant="success" onClick={async () => { const r = await a0('message', { text: viewCron.desc || viewCron.name }); if (r?.ok) { const updated = { ...viewCron, lastRun: new Date().toLocaleString(), state: 'running' }; setCrons(crons.map(c => c.id === viewCron.id ? updated : c)); setViewCron(updated); } }}>{I.play} Run Now</Btn><Btn s={s} accent={accent} variant="danger" onClick={async () => { setCrons(crons.filter(c => c.id !== viewCron.id)); setViewCron(null); await api(`/crons/${viewCron.id}`, { method: 'DELETE' }); }}>{I.trash} Delete</Btn></div>
     </>)}</Modal>
   </div>);
 }
 
-function DeliverablesPage({ s }) {
-  const [items, setItems] = useState(initialDeliverables); const [sel, setSel] = useState(null); const [filter, setFilter] = useState("all");
+function DeliverablesPage({ s, accent }) {
+  const [items, setItems] = useState([]); const [sel, setSel] = useState(null); const [filter, setFilter] = useState("all");
   const ti = { pdf: "📄", image: "🖼️", doc: "📝", video: "🎬" };
+    useEffect(() => { (async () => { const d = await api("/deliverables"); const db = Array.isArray(d?.database) ? d.database : []; const fs = Array.isArray(d?.filesystem) ? d.filesystem : []; setItems([...db, ...fs]); })(); }, []);
+
   const filtered = filter === "all" ? items : items.filter(i => i.type === filter);
   return (<div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Deliverables</h1>
@@ -394,16 +409,18 @@ function DeliverablesPage({ s }) {
       <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 16, flexWrap: "wrap" }}><Badge text={sel.type} color={sel.color} /><Badge text={sel.size} color={s.textMuted} /><Badge text={sel.agent} color={ACCENT.purple} /></div>
       <div style={{ textAlign: "center", fontSize: 13, color: s.textMuted, marginBottom: 20 }}>Created: {sel.created}</div>
       <div style={{ background: s.bgInput, borderRadius: 16, padding: 40, textAlign: "center", marginBottom: 20, border: `1px dashed ${s.border}` }}><div style={{ fontSize: 14, color: s.textMuted }}>Preview area — connects to file system in production</div></div>
-      <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}><Btn s={s}>{I.eye} View</Btn><Btn s={s} variant="ghost">{I.download} Download</Btn><Btn s={s} variant="ghost">{I.edit} Rename</Btn><Btn s={s} variant="danger" onClick={() => { setItems(items.filter(i => i.id !== sel.id)); setSel(null); }}>{I.trash} Delete</Btn></div>
+      <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}><Btn s={s}>{I.eye} View</Btn><Btn s={s} accent={accent} variant="ghost">{I.download} Download</Btn><Btn s={s} accent={accent} variant="ghost">{I.edit} Rename</Btn><Btn s={s} accent={accent} variant="danger" onClick={() => { setItems(items.filter(i => i.id !== sel.id)); setSel(null); }}>{I.trash} Delete</Btn></div>
     </>)}</Modal>
   </div>);
 }
 
-function LogsPage({ s }) {
+function LogsPage({ s, accent }) {
+    const [logs, setLogs] = useState([]);
+    useEffect(() => { (async () => { const d = await api("/activity"); if (d) setLogs(d); })(); }, []);
   const tc = { success: ACCENT.green, warning: ACCENT.amber, info: ACCENT.cyan, error: ACCENT.red };
   const tl = { success: "✓", warning: "⚠", info: "ℹ", error: "✕" };
   return (<div><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif", marginBottom: 28 }}>Activity Logs</h1>
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{initialLogs.map(log => (<Card key={log.id} color={tc[log.type]} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "16px 18px 16px 20px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}><div style={{ width: 30, height: 30, borderRadius: 10, background: tc[log.type] + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: tc[log.type], flexShrink: 0 }}>{tl[log.type]}</div><div style={{ flex: 1, minWidth: 200 }}><div style={{ fontSize: 14, color: s.text, lineHeight: 1.5 }}>{log.action}</div></div><Badge text={log.agent} color={ACCENT.purple} /><span style={{ fontSize: 12, color: s.textMuted, fontFamily: "'JetBrains Mono', monospace", minWidth: 140, textAlign: "right" }}>{log.time}</span></div></Card>))}</div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>{logs.map(log => (<Card key={log.id} color={tc[log.type]} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "16px 18px 16px 20px", display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}><div style={{ width: 30, height: 30, borderRadius: 10, background: tc[log.type] + "18", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, fontWeight: 700, color: tc[log.type], flexShrink: 0 }}>{tl[log.type]}</div><div style={{ flex: 1, minWidth: 200 }}><div style={{ fontSize: 14, color: s.text, lineHeight: 1.5 }}>{log.action}</div></div><Badge text={log.agent} color={ACCENT.purple} /><span style={{ fontSize: 12, color: s.textMuted, fontFamily: "'JetBrains Mono', monospace", minWidth: 140, textAlign: "right" }}>{log.time}</span></div></Card>))}</div>
   </div>);
 }
 
@@ -427,7 +444,18 @@ function OrgChartPage({ s }) {
 }
 
 // ─── SETTINGS ───
-function SettingsPage({ s, settings, setSettings, kanban, crons, agents, setKanban, setCrons, setAgents, services }) {
+function SettingsPage({ s, accent, settings, setSettings, kanban, crons, agents, setKanban, setCrons, setAgents, services }) {
+  // Normalize kanbanColumns: legacy array -> object map
+  useEffect(() => {
+    const kc = settings?.kanbanColumns;
+    if (Array.isArray(kc)) {
+      const keys = ["backlog","todo","inProgress","inReview","done"];
+      const obj = {};
+      keys.forEach((k, i) => { obj[k] = { label: kc[i] || k, enabled: true }; });
+      setSettings({ ...settings, kanbanColumns: obj });
+    }
+  }, []);
+
   const [backupStatus, setBackupStatus] = useState(null); const [updateStatus, setUpdateStatus] = useState(null); const [saveStatus, setSaveStatus] = useState(null);
   const [backups, setBackups] = useState([{ id: "b1", date: "2026-02-26 08:00", size: "24 KB", label: "Auto-backup" }, { id: "b2", date: "2026-02-25 16:00", size: "22 KB", label: "Pre-update backup" }, { id: "b3", date: "2026-02-24 08:00", size: "19 KB", label: "Auto-backup" }]);
 
@@ -437,25 +465,88 @@ function SettingsPage({ s, settings, setSettings, kanban, crons, agents, setKanb
     setSaveStatus("saved"); setTimeout(() => setSaveStatus(null), 2000);
   };
 
-  const createBackup = () => {
-    const data = { kanban, crons, agents, settings, timestamp: new Date().toISOString(), version: "2.0.0" };
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `salty-os-backup-${Date.now()}.json`; a.click(); URL.revokeObjectURL(url);
-    setBackupStatus("success"); setBackups([{ id: "b" + Date.now(), date: new Date().toLocaleString(), size: (blob.size / 1024).toFixed(1) + " KB", label: "Manual backup" }, ...backups]);
+  const createBackup = async () => {
+    try {
+      const backup = await api("/backup", { method: "POST", body: {} });
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = backup?.timestamp ? `salty-os-backup-${backup.timestamp.replace(/[:.]/g, "-")}.json` : `salty-os-backup-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+      const list = await api("/backups");
+      if (Array.isArray(list)) {
+        setBackups(list.map((b, i) => ({ id: b.filename || ("b"+i), date: new Date(b.created).toLocaleString(), size: (b.size/1024).toFixed(1)+" KB", label: b.filename || "Backup" })));
+      }
+      setBackupStatus("success");
+    } catch {
+      setBackupStatus("error");
+    }
     setTimeout(() => setBackupStatus(null), 3000);
   };
 
   const handleRestore = () => {
     const input = document.createElement("input"); input.type = "file"; input.accept = ".json";
-    input.onchange = (e) => { const file = e.target.files[0]; if (!file) return; const reader = new FileReader();
-      reader.onload = (ev) => { try { const d = JSON.parse(ev.target.result); if (d.kanban) setKanban(d.kanban); if (d.crons) setCrons(d.crons); if (d.agents) setAgents(d.agents); if (d.settings) setSettings(d.settings); setBackupStatus("restored"); } catch { setBackupStatus("error"); } setTimeout(() => setBackupStatus(null), 3000); };
-      reader.readAsText(file); }; input.click();
+    input.onchange = (e) => {
+      const file = e.target.files[0]; if (!file) return;
+      const reader = new FileReader();
+      reader.onload = async (ev) => {
+        try {
+          const payload = JSON.parse(ev.target.result);
+          // backend expects: { data: {...tables...} } from its own backup format
+          const data = payload?.data ? payload.data : payload;
+          const r = await api("/restore", { method: "POST", body: { data } });
+          if (r?.restored) {
+            // reload state from API
+            const [dbAgents, dbCrons, dbKanban, dbSettings] = await Promise.all([ api("/agents"), api("/crons"), api("/kanban"), api("/settings") ]);
+            if (dbAgents) setAgents(dbAgents);
+            if (dbCrons) setCrons(dbCrons);
+            if (dbKanban) { const b = dbKanban.board || dbKanban; setKanban({ backlog: b.backlog || [], todo: b.todo || [], inProgress: b.inProgress || [], inReview: b.inReview || [], done: b.done || [] }); }
+            if (dbSettings?.companyName) setSettings(dbSettings);
+            setBackupStatus("restored");
+          } else {
+            setBackupStatus("error");
+          }
+        } catch {
+          setBackupStatus("error");
+        }
+        setTimeout(() => setBackupStatus(null), 3000);
+      };
+      reader.readAsText(file);
+    };
+    input.click();
   };
 
-  return (<div><div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 28 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Settings</h1><Btn s={s} onClick={saveSettings}>{saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "✓ Saved" : "Save Settings"}</Btn></div>
+  return (<div><div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 28 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Settings</h1><Btn s={s} accent={accent} onClick={saveSettings}>{saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "✓ Saved" : "Save Settings"}</Btn></div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: 20 }}>
       <Card color={ACCENT.cyan} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>Company</div><Inp label="Company Name" value={settings.companyName} onChange={e => setSettings({ ...settings, companyName: e.target.value })} s={s} /><Inp label="Company Title" value={settings.companyTitle} onChange={e => setSettings({ ...settings, companyTitle: e.target.value })} s={s} /><Inp label="Logo URL" value={settings.logoUrl} onChange={e => setSettings({ ...settings, logoUrl: e.target.value })} s={s} placeholder="https://..." /></div></Card>
-      <Card color={ACCENT.purple} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>Kanban Columns</div>{settings.kanbanColumns.map((col, i) => (<div key={i} style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "center" }}><input value={col} onChange={e => { const c = [...settings.kanbanColumns]; c[i] = e.target.value; setSettings({ ...settings, kanbanColumns: c }); }} style={{ flex: 1, padding: "10px 14px", background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 12, color: s.text, fontSize: 14, outline: "none" }} /><button onClick={() => setSettings({ ...settings, kanbanColumns: settings.kanbanColumns.filter((_, j) => j !== i) })} style={{ background: ACCENT.red + "15", border: "none", borderRadius: 10, padding: "8px 12px", cursor: "pointer", color: ACCENT.red }}>{I.trash}</button></div>))}<Btn s={s} variant="ghost" onClick={() => setSettings({ ...settings, kanbanColumns: [...settings.kanbanColumns, "New Column"] })} style={{ marginTop: 8 }}>{I.plus} Add Column</Btn></div></Card>
+        <Card color={ACCENT.purple} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}>
+          <div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>Kanban Columns</div>
+          {["backlog","todo","inProgress","inReview","done"].map((k) => {
+            const col = (settings.kanbanColumns && typeof settings.kanbanColumns === "object") ? settings.kanbanColumns[k] : null;
+            const label = col?.label || (k === "todo" ? "To-Do" : k === "inProgress" ? "In Progress" : k === "inReview" ? "In Review" : k[0].toUpperCase() + k.slice(1));
+            const enabled = col?.enabled !== false;
+            return (
+              <div key={k} style={{ display: "flex", gap: 8, marginBottom: 10, alignItems: "center" }}>
+                <button onClick={() => {
+                  const next = { ...(settings.kanbanColumns || {}) };
+                  next[k] = { label, enabled: !enabled };
+                  setSettings({ ...settings, kanbanColumns: next });
+                }} style={{ width: 44, padding: "8px 10px", borderRadius: 12, border: `1px solid ${enabled ? accent + "40" : s.border}`, background: enabled ? accent + "15" : s.bgInput, color: enabled ? accent : s.textMuted, fontSize: 12, fontWeight: 800, cursor: "pointer" }}>
+                  {enabled ? "ON" : "OFF"}
+                </button>
+                <input value={label} disabled={!enabled} onChange={e => {
+                  const next = { ...(settings.kanbanColumns || {}) };
+                  next[k] = { label: e.target.value, enabled };
+                  setSettings({ ...settings, kanbanColumns: next });
+                }} style={{ flex: 1, padding: "10px 14px", background: enabled ? s.bgInput : (s.bgInput + "80"), border: `1px solid ${s.border}`, borderRadius: 12, color: enabled ? s.text : s.textDim, fontSize: 14, outline: "none" }} />
+              </div>
+            );
+          })}
+          <div style={{ fontSize: 12, color: s.textMuted, marginTop: 10, lineHeight: 1.5 }}>Turn columns on/off and rename labels. Hidden columns keep their tasks in the database.</div>
+        </div></Card>
+
       <Card color={ACCENT.amber} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>Appearance</div><Inp label="Accent Color" value={settings.accentColor} onChange={e => setSettings({ ...settings, accentColor: e.target.value })} s={s} /><div style={{ display: "flex", gap: 8, marginTop: 8 }}>{["#00E5FF", "#FFB300", "#B388FF", "#00E676", "#FF5252", "#FF80AB"].map(c => (<div key={c} onClick={() => setSettings({ ...settings, accentColor: c })} style={{ width: 36, height: 36, borderRadius: 10, background: c, cursor: "pointer", border: settings.accentColor === c ? `3px solid ${s.text}` : "3px solid transparent", transition: "all 0.2s" }} />))}</div></div></Card>
       <Card color={ACCENT.green} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>API Connections</div><Inp label="Agent Zero URL" value={settings.agentZeroUrl} onChange={e => setSettings({ ...settings, agentZeroUrl: e.target.value })} s={s} placeholder="http://agent-zero:5000" /><Inp label="n8n URL" value={settings.n8nUrl} onChange={e => setSettings({ ...settings, n8nUrl: e.target.value })} s={s} placeholder="http://n8n:5678" /><Inp label="Postiz URL" value={settings.postizUrl} onChange={e => setSettings({ ...settings, postizUrl: e.target.value })} s={s} placeholder="http://postiz:5000" /><Inp label="Firecrawl URL" value={settings.firecrawlUrl || ""} onChange={e => setSettings({ ...settings, firecrawlUrl: e.target.value })} s={s} placeholder="http://firecrawl:3002" /><Inp label="Gotenberg URL" value={settings.gotenbergUrl || ""} onChange={e => setSettings({ ...settings, gotenbergUrl: e.target.value })} s={s} placeholder="http://gotenberg:3000" /></div></Card>
 
@@ -463,10 +554,10 @@ function SettingsPage({ s, settings, setSettings, kanban, crons, agents, setKanb
       <Card color={ACCENT.cyan} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}><span style={{ color: ACCENT.cyan }}>{I.backup}</span><div style={{ fontSize: 17, fontWeight: 700, color: s.text }}>Backup & Restore</div></div>
         {backupStatus === "success" && <div style={{ padding: "10px 16px", background: ACCENT.green + "15", border: `1px solid ${ACCENT.green}30`, borderRadius: 12, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}><span style={{ color: ACCENT.green }}>{I.check}</span><span style={{ color: ACCENT.green, fontSize: 13, fontWeight: 600 }}>Backup created and downloaded!</span></div>}
-        {backupStatus === "restored" && <div style={{ padding: "10px 16px", background: ACCENT.cyan + "15", border: `1px solid ${ACCENT.cyan}30`, borderRadius: 12, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}><span style={{ color: ACCENT.cyan }}>{I.check}</span><span style={{ color: ACCENT.cyan, fontSize: 13, fontWeight: 600 }}>Data restored successfully!</span></div>}
+        {backupStatus === "restored" && <div style={{ padding: "10px 16px", background: accent + "15", border: `1px solid ${ACCENT.cyan}30`, borderRadius: 12, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}><span style={{ color: ACCENT.cyan }}>{I.check}</span><span style={{ color: ACCENT.cyan, fontSize: 13, fontWeight: 600 }}>Data restored successfully!</span></div>}
         {backupStatus === "error" && <div style={{ padding: "10px 16px", background: ACCENT.red + "15", border: `1px solid ${ACCENT.red}30`, borderRadius: 12, marginBottom: 16 }}><span style={{ color: ACCENT.red, fontSize: 13, fontWeight: 600 }}>Invalid backup file.</span></div>}
         <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 16, lineHeight: 1.5 }}>Export all dashboard data (tasks, agents, crons, settings) as JSON. Restore from any previous backup without losing data.</div>
-        <div style={{ display: "flex", gap: 12, marginBottom: 20 }}><Btn s={s} onClick={createBackup}>{I.download} Create Backup</Btn><Btn s={s} variant="ghost" onClick={handleRestore}>{I.upload} Restore Backup</Btn></div>
+        <div style={{ display: "flex", gap: 12, marginBottom: 20 }}><Btn s={s} accent={accent} onClick={createBackup}>{I.download} Create Backup</Btn><Btn s={s} accent={accent} variant="ghost" onClick={handleRestore}>{I.upload} Restore Backup</Btn></div>
         <div style={{ fontSize: 13, fontWeight: 600, color: s.textMuted, marginBottom: 10 }}>Recent Backups</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>{backups.map(b => (<div key={b.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: s.bgInput, borderRadius: 12, fontSize: 13 }}><span style={{ color: ACCENT.cyan }}>{I.backup}</span><span style={{ color: s.text, flex: 1 }}>{b.label}</span><span style={{ color: s.textMuted, fontFamily: "'JetBrains Mono'", fontSize: 11 }}>{b.date}</span><span style={{ color: s.textDim, fontSize: 11 }}>{b.size}</span></div>))}</div>
       </div></Card>
@@ -478,7 +569,7 @@ function SettingsPage({ s, settings, setSettings, kanban, crons, agents, setKanb
         <Inp label="Branch" value={settings.githubBranch || "main"} onChange={e => setSettings({ ...settings, githubBranch: e.target.value })} s={s} placeholder="main" mono />
         <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 16, lineHeight: 1.5, padding: "12px 16px", background: s.bgInput, borderRadius: 12 }}><strong style={{ color: ACCENT.cyan }}>Safe updates:</strong> Pulling updates only replaces UI/code files. Your data (tasks, agents, crons, deliverables) is stored separately in the database/volume and will not be affected.</div>
         <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-          <Btn s={s} variant="ghost" onClick={() => { setUpdateStatus("checking"); setTimeout(() => setUpdateStatus("available"), 2000); }}>{I.refresh} {updateStatus === "checking" ? "Checking..." : "Check for Updates"}</Btn>
+          <Btn s={s} accent={accent} variant="ghost" onClick={() => { setUpdateStatus("checking"); setTimeout(() => setUpdateStatus("available"), 2000); }}>{I.refresh} {updateStatus === "checking" ? "Checking..." : "Check for Updates"}</Btn>
           {updateStatus === "available" && <Btn s={s}>{I.download} Pull Update</Btn>}
         </div>
         {updateStatus === "available" && (<div style={{ padding: "14px 16px", background: ACCENT.green + "10", border: `1px solid ${ACCENT.green}25`, borderRadius: 14, marginBottom: 12 }}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}><span style={{ color: ACCENT.green }}>{I.check}</span><span style={{ color: ACCENT.green, fontSize: 14, fontWeight: 700 }}>Update Available</span></div><div style={{ fontSize: 12, color: s.textMuted, lineHeight: 1.5 }}>v2.1.0 — Enhanced drag-and-drop, real-time Agent Zero WebSocket, improved mobile layout.</div></div>)}
@@ -492,26 +583,32 @@ function SettingsPage({ s, settings, setSettings, kanban, crons, agents, setKanb
 // MAIN APP
 // ═════════════════════════════════════════
 export default function SaltyOS() {
-  const [dark, setDark] = useState(true); const [page, setPage] = useState("dashboard"); const [sidebarOpen, setSidebarOpen] = useState(true); const [time, setTime] = useState(new Date());
-  const [kanban, setKanban] = useState(initialKanban); const [agents, setAgents] = useState(initialAgents); const [crons, setCrons] = useState(initialCrons);
+  const [dark, setDark] = useState(true); const [page, setPage] = useState(() => { try { return localStorage.getItem("salty.page") || "dashboard"; } catch { return "dashboard"; } }); const [sidebarOpen, setSidebarOpen] = useState(true); const [time, setTime] = useState(new Date());
+  const [kanban, setKanban] = useState({ backlog: [], todo: [], inProgress: [], inReview: [], done: [] }); const [agents, setAgents] = useState([]); const [crons, setCrons] = useState([]);
   const [settings, setSettings] = useState({ companyName: "BKE Logistics", companyTitle: "Freight Brokerage Operations Hub", logoUrl: "", accentColor: ACCENT.cyan, kanbanColumns: ["Backlog", "To-Do", "In Progress", "In Review", "Done"], agentZeroUrl: "http://agent-zero:5000", n8nUrl: "http://n8n:5678", postizUrl: "http://postiz:5000", firecrawlUrl: "http://firecrawl:3002", gotenbergUrl: "http://gotenberg:3000", githubRepo: "bke-logistics/salty-os", githubBranch: "main" });
   const [services, setServices] = useState({}); const [a0Agents, setA0Agents] = useState([]); const [a0Status, setA0Status] = useState(null); const [loaded, setLoaded] = useState(false);
+  const [versionInfo, setVersionInfo] = useState(null);
+
   const s = makeS(dark);
+  useEffect(() => { try { localStorage.setItem("salty.page", page); } catch {} }, [page]);
+  const accent = (settings && settings.accentColor) ? settings.accentColor : ACCENT.cyan;
 
   // ─── Load data from API on mount ───
   useEffect(() => {
     const load = async () => {
-      const [dbAgents, dbCrons, dbKanban, dbSettings, svc, a0Ag, a0Health] = await Promise.all([
+      const [dbAgents, dbCrons, dbKanban, dbSettings, svc, a0Ag, a0Health, vInfo] = await Promise.all([
         api('/agents'), api('/crons'), api('/kanban'), api('/settings'),
-        api('/services'), a0('agents', { action: 'list' }), a0('health'),
+        api('/services'), a0('agents', { action: 'list' }), a0('health'), api('/version'),
       ]);
-      if (dbAgents?.length) setAgents(dbAgents);
-      if (dbCrons?.length) setCrons(dbCrons);
-      if (dbKanban && Object.keys(dbKanban).length > 0 && dbKanban.backlog) setKanban(dbKanban);
+        if (dbAgents) setAgents(dbAgents);
+        if (dbCrons) setCrons(dbCrons);
+      if (dbKanban) { const b = dbKanban.board || dbKanban; setKanban({ backlog: b.backlog || [], todo: b.todo || [], inProgress: b.inProgress || [], inReview: b.inReview || [], done: b.done || [] }); }
       if (dbSettings?.companyName) setSettings(dbSettings);
       if (svc) setServices(svc);
       if (a0Ag?.ok) setA0Agents(a0Ag.data);
       if (a0Health) setA0Status(a0Health);
+      if (vInfo) setVersionInfo(vInfo);
+
       setLoaded(true);
     };
     load();
@@ -524,18 +621,18 @@ export default function SaltyOS() {
     return () => { clearInterval(t); clearInterval(svcTimer); };
   }, []);
   const nav = [{ key: "dashboard", label: "Dashboard", icon: I.dashboard }, { key: "kanban", label: "Kanban", icon: I.kanban }, { key: "agents", label: "Agents", icon: I.agents }, { key: "scheduler", label: "Scheduler", icon: I.scheduler }, { key: "deliverables", label: "Deliverables", icon: I.deliverables }, { key: "logs", label: "Activity Logs", icon: I.logs }, { key: "org", label: "Org Chart", icon: I.org }, { key: "settings", label: "Settings", icon: I.settings }];
-  const renderPage = () => { switch (page) { case "dashboard": return <DashboardPage s={s} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; case "kanban": return <KanbanPage s={s} kanban={kanban} setKanban={setKanban} agents={agents} />; case "agents": return <AgentsPage s={s} agents={agents} setAgents={setAgents} a0Agents={a0Agents} />; case "scheduler": return <SchedulerPage s={s} crons={crons} setCrons={setCrons} agents={agents} />; case "deliverables": return <DeliverablesPage s={s} />; case "logs": return <LogsPage s={s} />; case "org": return <OrgChartPage s={s} />; case "settings": return <SettingsPage s={s} settings={settings} setSettings={setSettings} kanban={kanban} crons={crons} agents={agents} setKanban={setKanban} setCrons={setCrons} setAgents={setAgents} services={services} />; default: return <DashboardPage s={s} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; } };
+  const renderPage = () => { switch (page) { case "dashboard": return <DashboardPage s={s} accent={accent} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; case "kanban": return <KanbanPage s={s} accent={accent} settings={settings} kanban={kanban} setKanban={setKanban} agents={agents} />; case "agents": return <AgentsPage s={s} accent={accent} agents={agents} setAgents={setAgents} a0Agents={a0Agents} />; case "scheduler": return <SchedulerPage s={s} accent={accent} crons={crons} setCrons={setCrons} agents={agents} />; case "deliverables": return <DeliverablesPage s={s} accent={accent} />; case "logs": return <LogsPage s={s} accent={accent} />; case "org": return <OrgChartPage s={s} />; case "settings": return <SettingsPage s={s} accent={accent} settings={settings} setSettings={setSettings} kanban={kanban} crons={crons} agents={agents} setKanban={setKanban} setCrons={setCrons} setAgents={setAgents} services={services} />; default: return <DashboardPage s={s} accent={accent} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; } };
 
   return (<div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans', sans-serif", background: s.bg, color: s.text, overflow: "hidden", transition: "all 0.4s ease" }}>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
-    <style>{`@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes slideUp{from{opacity:0;transform:translateY(20px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}@keyframes pulse{0%,100%{opacity:.3;transform:scale(1)}50%{opacity:0;transform:scale(2)}}*{box-sizing:border-box}::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:${s.border};border-radius:3px}::selection{background:${ACCENT.cyan}30}`}</style>
+    <style>{`@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes slideUp{from{opacity:0;transform:translateY(20px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}@keyframes pulse{0%,100%{opacity:.3;transform:scale(1)}50%{opacity:0;transform:scale(2)}}*{box-sizing:border-box}::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:${s.border};border-radius:3px}::selection{background:${accent}30}`}</style>
     <aside style={{ width: sidebarOpen ? 240 : 72, background: s.bgSidebar, borderRight: `1px solid ${s.border}`, display: "flex", flexDirection: "column", transition: "width 0.4s cubic-bezier(0.16, 1, 0.3, 1)", overflow: "hidden", flexShrink: 0, zIndex: 10 }}>
       <div style={{ padding: sidebarOpen ? "24px 20px" : "24px 16px", borderBottom: `1px solid ${s.border}`, display: "flex", alignItems: "center", gap: 12, minHeight: 80 }}>
         <div style={{ width: 40, height: 40, borderRadius: 14, background: `linear-gradient(135deg, ${ACCENT.cyan}, ${ACCENT.cyanDark})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 900, color: "#0a0e17", fontFamily: "'Space Grotesk'", flexShrink: 0, boxShadow: `0 4px 16px ${ACCENT.cyanGlow}` }}>S</div>
         {sidebarOpen && <div><div style={{ fontSize: 17, fontWeight: 800, color: s.text, fontFamily: "'Space Grotesk'", letterSpacing: -0.5 }}>Salty OS</div><div style={{ fontSize: 10, color: s.textMuted, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>Source of Truth</div></div>}
       </div>
-      <nav style={{ flex: 1, padding: "12px 8px", display: "flex", flexDirection: "column", gap: 2 }}>{nav.map(item => { const active = page === item.key; return (<button key={item.key} onClick={() => setPage(item.key)} style={{ display: "flex", alignItems: "center", gap: 14, padding: sidebarOpen ? "11px 16px" : "11px 0", borderRadius: 14, border: "none", cursor: "pointer", width: "100%", background: active ? ACCENT.cyan + "12" : "transparent", color: active ? ACCENT.cyan : s.textMuted, fontSize: 14, fontWeight: active ? 700 : 500, fontFamily: "'DM Sans'", transition: "all 0.25s", justifyContent: sidebarOpen ? "flex-start" : "center", position: "relative" }}>{active && <div style={{ position: "absolute", left: 0, top: "20%", bottom: "20%", width: 3, borderRadius: 2, background: ACCENT.cyan }} />}{item.icon}{sidebarOpen && <span>{item.label}</span>}</button>); })}</nav>
-      <div style={{ padding: sidebarOpen ? "16px 20px" : "16px", borderTop: `1px solid ${s.border}` }}><div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: sidebarOpen ? "flex-start" : "center" }}><StatusDot status="active" />{sidebarOpen && <span style={{ fontSize: 12, fontWeight: 600, color: ACCENT.green }}>Agent Zero Online</span>}</div></div>
+      <nav style={{ flex: 1, padding: "12px 8px", display: "flex", flexDirection: "column", gap: 2 }}>{nav.map(item => { const active = page === item.key; return (<button key={item.key} onClick={() => setPage(item.key)} style={{ display: "flex", alignItems: "center", gap: 14, padding: sidebarOpen ? "11px 16px" : "11px 0", borderRadius: 14, border: "none", cursor: "pointer", width: "100%", background: active ? accent + "12" : "transparent", color: active ? accent : s.textMuted, fontSize: 14, fontWeight: active ? 700 : 500, fontFamily: "'DM Sans'", transition: "all 0.25s", justifyContent: sidebarOpen ? "flex-start" : "center", position: "relative" }}>{active && <div style={{ position: "absolute", left: 0, top: "20%", bottom: "20%", width: 3, borderRadius: 2, background: accent }} />}{item.icon}{sidebarOpen && <span>{item.label}</span>}</button>); })}</nav>
+      <div style={{ padding: sidebarOpen ? "16px 20px" : "16px", borderTop: `1px solid ${s.border}` }}><div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: sidebarOpen ? "flex-start" : "center" }}><div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: sidebarOpen ? "flex-start" : "center" }}><StatusDot status="active" />{sidebarOpen && <span style={{ fontSize: 12, fontWeight: 600, color: ACCENT.green }}>Agent Zero Online</span>}</div>{sidebarOpen && <div style={{ fontSize: 11, fontWeight: 600, color: s.textMuted }}>Salty OS {versionInfo?.version ? `v${versionInfo.version}` : ""}</div>}</div></div>
     </aside>
     <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <header style={{ padding: "16px 28px", borderBottom: `1px solid ${s.border}`, display: "flex", alignItems: "center", gap: 16, background: s.bgSidebar, flexShrink: 0 }}>

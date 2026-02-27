@@ -194,6 +194,23 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
+// ─── VERSION ───
+app.get('/api/version', async (req, res) => {
+  try {
+    const pkg = require('/app/package.json');
+    res.json({
+      name: pkg.name || 'salty-os',
+      version: pkg.version || '1.0.0',
+      buildTime: process.env.BUILD_TIME || null,
+      node: process.version,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.json({ name: 'salty-os', version: '1.0.0', error: err.message });
+  }
+});
+
+
 // ─── KANBAN ───
 app.get('/api/kanban', async (req, res) => {
   try {
@@ -569,9 +586,17 @@ app.post('/api/restore', async (req, res) => {
     }
     if (data.settings) {
       await client.query('DELETE FROM settings');
-      for (const s of data.settings) {
-        await client.query('INSERT INTO settings (key,value) VALUES ($1,$2)', [s.key, s.value]);
-      }
+        for (const s of data.settings) {
+          let jsonStr;
+          if (typeof s.value === "string") {
+            // if it is already JSON, keep it; otherwise wrap as JSON string
+            try { JSON.parse(s.value); jsonStr = s.value; }
+            catch { jsonStr = JSON.stringify(s.value); }
+          } else {
+            jsonStr = JSON.stringify(s.value);
+          }
+          await client.query("INSERT INTO settings (key,value) VALUES ($1,$2::jsonb)", [s.key, jsonStr]);
+        }
     }
     await client.query('COMMIT');
     await logActivity('system', 'backup_restored', 'Full restore completed', 'system');
