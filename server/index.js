@@ -603,14 +603,68 @@ app.get('/api/backups', async (req, res) => {
 });
 
 // ─── SERVICE PROXY — Agent Zero ───
-app.all('/api/proxy/agent-zero/*', async (req, res) => {
-  const targetUrl = `${process.env.AGENT_ZERO_URL || 'http://agent-zero:80'}${req.params[0] ? '/' + req.params[0] : ''}`;
+// ─── AGENT ZERO CSRF SESSION MANAGEMENT ───
+const a0Session = { cookie: null, csrfToken: null, lastRefresh: 0 };
+const A0_URL = process.env.AGENT_ZERO_URL || 'http://agent-zero:80';
+
+async function getA0CsrfToken() {
+  const now = Date.now();
+  // Refresh CSRF token every 10 minutes or if we don't have one
+  if (a0Session.csrfToken && (now - a0Session.lastRefresh) < 600000) {
+    return a0Session;
+  }
   try {
+    const resp = await fetch(`${A0_URL}/csrf_token`, {
+      method: 'GET',
+      headers: { 'Accept': 'application/json' },
+    });
+    const setCookies = resp.headers.getSetCookie?.() || [];
+    const cookieStr = setCookies.map(c => c.split(';')[0]).join('; ');
+    const data = await resp.json();
+    a0Session.cookie = cookieStr;
+    a0Session.csrfToken = data.csrf_token || data.token;
+    a0Session.lastRefresh = now;
+    return a0Session;
+  } catch (err) {
+    console.error('Failed to get A0 CSRF token:', err.message);
+    return a0Session;
+  }
+}
+
+// ─── SERVICE PROXY — Agent Zero ───
+app.all('/api/proxy/agent-zero/*', async (req, res) => {
+  const path = req.params[0] || '';
+  const targetUrl = `${A0_URL}/${path}`;
+  try {
+    // Get CSRF token for non-GET requests
+    const session = await getA0CsrfToken();
+    const headers = { 'Content-Type': 'application/json' };
+    if (session.csrfToken) headers['X-CSRF-Token'] = session.csrfToken;
+    if (session.cookie) headers['Cookie'] = session.cookie;
+
     const response = await fetch(targetUrl, {
       method: req.method,
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       ...(req.method !== 'GET' ? { body: JSON.stringify(req.body) } : {}),
     });
+
+    // If CSRF failed, refresh token and retry once
+    if (response.status === 403) {
+      a0Session.lastRefresh = 0;
+      const retrySession = await getA0CsrfToken();
+      const retryHeaders = { 'Content-Type': 'application/json' };
+      if (retrySession.csrfToken) retryHeaders['X-CSRF-Token'] = retrySession.csrfToken;
+      if (retrySession.cookie) retryHeaders['Cookie'] = retrySession.cookie;
+
+      const retryResp = await fetch(targetUrl, {
+        method: req.method,
+        headers: retryHeaders,
+        ...(req.method !== 'GET' ? { body: JSON.stringify(req.body) } : {}),
+      });
+      const data = await retryResp.json().catch(() => retryResp.text());
+      return res.status(retryResp.status).json(data);
+    }
+
     const data = await response.json().catch(() => response.text());
     res.status(response.status).json(data);
   } catch (err) {
