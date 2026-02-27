@@ -661,12 +661,14 @@ app.all('/api/proxy/agent-zero/*', async (req, res) => {
         headers: retryHeaders,
         ...(req.method !== 'GET' ? { body: JSON.stringify(req.body) } : {}),
       });
-      const data = await retryResp.json().catch(() => retryResp.text());
-      return res.status(retryResp.status).json(data);
+      const retryText = await retryResp.text();
+      try { return res.status(retryResp.status).json(JSON.parse(retryText)); }
+      catch { return res.status(retryResp.status).send(retryText); }
     }
 
-    const data = await response.json().catch(() => response.text());
-    res.status(response.status).json(data);
+    const text = await response.text();
+    try { res.status(response.status).json(JSON.parse(text)); }
+    catch { res.status(response.status).send(text); }
   } catch (err) {
     res.status(502).json({ error: `Agent Zero unreachable: ${err.message}` });
   }
