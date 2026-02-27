@@ -95,7 +95,7 @@ services:
       DB_USER: salty
       DB_PASSWORD: saltyos_secret
       SALTY_AUTH_TOKEN: ${SALTY_AUTH_TOKEN:-}
-      AGENT_ZERO_URL: http://agent-zero:50080
+      AGENT_ZERO_URL: http://agent-zero:80
       N8N_URL: http://n8n:5678
       POSTIZ_URL: http://postiz:5000
       GOTENBERG_URL: http://gotenberg:3000
