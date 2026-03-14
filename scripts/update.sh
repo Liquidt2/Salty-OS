@@ -48,9 +48,9 @@ echo ""
 echo "======================================="
 echo "  Update complete!"
 echo "  Data volume: PRESERVED"
-echo "  Dashboard: http://localhost:3456"
+echo "  Dashboard: http://localhost:3000"
 echo "======================================="
-e ps | grep -q "Up"; then
+if docker ps | grep -q "Up"; then
   echo "✅ Salty OS is running!"
   echo ""
   
