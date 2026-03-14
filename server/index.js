@@ -7,17 +7,69 @@ import express from 'express';
 import pg from 'pg';
 import cors from 'cors';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, unlinkSync, copyFileSync, renameSync } from 'fs';
-import { join } from 'path';
-import { execSync } from 'child_process';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { execSync, exec } from 'child_process';
 import crypto from 'crypto';
 
 const { Pool } = pg;
 const app = express();
 const PORT = process.env.API_PORT || 3001;
 
+// ─── Resolve repo root (works both locally and in Docker) ───
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+// server/ lives one level inside the repo root
+const REPO_ROOT = process.env.APP_ROOT || join(__dirname, '..');
+const DATA_DIR = join(REPO_ROOT, 'data');
+if (!existsSync(DATA_DIR)) mkdirSync(DATA_DIR, { recursive: true });
+const SETTINGS_FALLBACK = join(DATA_DIR, 'settings.json');
+
+// ─── Settings Helper ───
+async function getSaltySettings() {
+  let settings = {};
+  if (existsSync(SETTINGS_FALLBACK)) {
+    try { settings = JSON.parse(readFileSync(SETTINGS_FALLBACK, 'utf-8')); } catch (e) {}
+  }
+  try {
+    const { rows } = await pool.query("SELECT key, value FROM settings");
+    rows.forEach(r => { settings[r.key] = JSON.parse(r.value); });
+  } catch (err) { /* DB down, just use file */ }
+  return settings;
+}
+
+async function saveSaltySettings(entries) {
+  let current = {};
+  if (existsSync(SETTINGS_FALLBACK)) {
+    try { current = JSON.parse(readFileSync(SETTINGS_FALLBACK, 'utf-8')); } catch (e) {}
+  }
+  const updated = { ...current, ...entries };
+  writeFileSync(SETTINGS_FALLBACK, JSON.stringify(updated, null, 2));
+
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      for (const [key, value] of Object.entries(entries)) {
+        await client.query(
+          `INSERT INTO settings (key, value) VALUES ($1, $2)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+          [key, JSON.stringify(value)]
+        );
+      }
+      await client.query('COMMIT');
+    } finally { client.release(); }
+  } catch (err) { console.error("DB Settings save failed, saved to file only."); }
+}
+
 // ─── Middleware ───
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+
+// ─── Static files for uploads ───
+const UPLOADS_DIR = join(REPO_ROOT, 'public', 'uploads');
+if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
+app.use('/uploads', express.static(UPLOADS_DIR));
 
 // Auth middleware — simple token gate
 const AUTH_TOKEN = process.env.SALTY_AUTH_TOKEN || '';
@@ -30,8 +82,10 @@ const authMiddleware = (req, res, next) => {
 app.use('/api', authMiddleware);
 
 // ─── PostgreSQL Connection ───
-const pool = new Pool({
-  host: process.env.DB_HOST || 'postgres',
+// Try env host, then 'postgres' (docker), then 'localhost' (local dev)
+const DB_HOSTS = [process.env.DB_HOST, 'postgres', 'localhost', '127.0.0.1'].filter(Boolean);
+let pool = new Pool({
+  host: DB_HOSTS[0],
   port: parseInt(process.env.DB_PORT || '5432'),
   database: process.env.DB_NAME || 'saltyos',
   user: process.env.DB_USER || 'salty',
@@ -40,18 +94,22 @@ const pool = new Pool({
 
 // Retry connection with backoff
 async function connectWithRetry(retries = 10, delay = 3000) {
-  for (let i = 0; i < retries; i++) {
-    try {
-      const client = await pool.connect();
-      console.log('✅ PostgreSQL connected');
-      client.release();
-      return true;
-    } catch (err) {
-      console.log(`⏳ Waiting for PostgreSQL... (${i + 1}/${retries})`);
-      await new Promise(r => setTimeout(r, delay));
+  for (let host of DB_HOSTS) {
+    console.log(`🔌 Trying database host: ${host}...`);
+    pool = new Pool({ ...pool.options, host });
+    for (let i = 0; i < 3; i++) { // Try each host 3 times
+      try {
+        const client = await pool.connect();
+        console.log(`✅ PostgreSQL connected to ${host}`);
+        client.release();
+        return true;
+      } catch (err) {
+        console.log(`⏳ Waiting for PostgreSQL on ${host}... (${i + 1}/3)`);
+        await new Promise(r => setTimeout(r, 1000));
+      }
     }
   }
-  console.error('❌ Could not connect to PostgreSQL');
+  console.error('❌ Could not connect to any PostgreSQL host. Running in degradated mode (no DB).');
   return false;
 }
 
@@ -194,28 +252,18 @@ app.get('/api/health', async (req, res) => {
   }
 });
 
-// ─── VERSION ───
-app.get('/api/version', async (req, res) => {
-  try {
-    const pkg = require('/app/package.json');
-    res.json({
-      name: pkg.name || 'salty-os',
-      version: pkg.version || '1.0.0',
-      buildTime: process.env.BUILD_TIME || null,
-      node: process.version,
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err) {
-    res.json({ name: 'salty-os', version: '1.0.0', error: err.message });
-  }
-});
+
 
 
 // ─── KANBAN ───
 app.get('/api/kanban', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM kanban_tasks ORDER BY created_at DESC');
-    // Group by status for frontend
+    let rows = [];
+    try {
+      const dbRes = await pool.query('SELECT * FROM kanban_tasks ORDER BY created_at DESC');
+      rows = dbRes.rows;
+    } catch (err) { /* DB Offline — in production we could load from a backup file here */ }
+    
     const board = {};
     rows.forEach(task => {
       if (!board[task.status]) board[task.status] = [];
@@ -312,7 +360,11 @@ app.post('/api/kanban/sync', async (req, res) => {
 // ─── CRON TASKS ───
 app.get('/api/crons', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM cron_tasks ORDER BY created_at DESC');
+    let rows = [];
+    try {
+      const dbRes = await pool.query('SELECT * FROM cron_tasks ORDER BY created_at DESC');
+      rows = dbRes.rows;
+    } catch (err) {}
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -373,7 +425,11 @@ app.delete('/api/crons/:id', async (req, res) => {
 // ─── AGENTS ───
 app.get('/api/agents', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM agents ORDER BY name');
+    let rows = [];
+    try {
+      const dbRes = await pool.query('SELECT * FROM agents ORDER BY name');
+      rows = dbRes.rows;
+    } catch (err) {}
     res.json(rows);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -483,60 +539,184 @@ app.get('/api/deliverables', async (req, res) => {
 // ─── SETTINGS ───
 app.get('/api/settings', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM settings');
-    const settings = {};
-    rows.forEach(r => { settings[r.key] = r.value; });
+    const settings = await getSaltySettings();
     res.json(settings);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/settings', async (req, res) => {
-  const entries = req.body; // { key: value, key: value, ... }
-  const client = await pool.connect();
+// ─── OPENCLAW SKILLS ───
+const SKILLS_DIR = process.env.OPENCLAW_SKILLS_DIR || join(REPO_ROOT, 'openclaw-skills');
+
+app.get('/api/skills', (req, res) => {
   try {
-    await client.query('BEGIN');
-    for (const [key, value] of Object.entries(entries)) {
-      await client.query(
-        `INSERT INTO settings (key, value) VALUES ($1, $2)
-         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
-        [key, JSON.stringify(value)]
-      );
-    }
-    await client.query('COMMIT');
-    res.json({ saved: Object.keys(entries).length });
+    if (!existsSync(SKILLS_DIR)) mkdirSync(SKILLS_DIR, { recursive: true });
+    const files = readdirSync(SKILLS_DIR)
+      .filter(f => f.endsWith('.md'))
+      .map(f => {
+        const stat = statSync(join(SKILLS_DIR, f));
+        return { name: f, size: stat.size, updated: stat.mtime };
+      })
+      .sort((a, b) => new Date(b.updated) - new Date(a.updated));
+    res.json(files);
   } catch (err) {
-    await client.query('ROLLBACK');
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
+
+app.get('/api/skills/:name', (req, res) => {
+  try {
+    const filename = req.params.name;
+    if (!filename.endsWith('.md')) return res.status(400).json({ error: 'Only .md files allowed' });
+    const filePath = join(SKILLS_DIR, filename);
+    if (!existsSync(filePath)) return res.status(404).json({ error: 'Skill not found' });
+    const content = readFileSync(filePath, 'utf-8');
+    res.json({ name: filename, content });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/skills/:name', (req, res) => {
+  try {
+    const filename = req.params.name;
+    if (!filename.endsWith('.md')) return res.status(400).json({ error: 'Only .md files allowed' });
+    if (!existsSync(SKILLS_DIR)) mkdirSync(SKILLS_DIR, { recursive: true });
+    
+    // Support renaming by passing newName in the body
+    if (req.body.newName && req.body.newName !== filename) {
+      const newFilename = req.body.newName.endsWith('.md') ? req.body.newName : `${req.body.newName}.md`;
+      const oldPath = join(SKILLS_DIR, filename);
+      const newPath = join(SKILLS_DIR, newFilename);
+      
+      if (existsSync(oldPath)) {
+        if (existsSync(newPath)) return res.status(409).json({ error: 'Target filename already exists' });
+        renameSync(oldPath, newPath);
+        if (req.body.content !== undefined) {
+          writeFileSync(newPath, req.body.content, 'utf-8');
+        }
+        return res.json({ name: newFilename, saved: true });
+      }
+    }
+    
+    const filePath = join(SKILLS_DIR, filename);
+    writeFileSync(filePath, req.body.content || '', 'utf-8');
+    res.json({ name: filename, saved: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/skills/:name', (req, res) => {
+  try {
+    const filename = req.params.name;
+    const filePath = join(SKILLS_DIR, filename);
+    if (!existsSync(filePath)) return res.status(404).json({ error: 'Skill not found' });
+    unlinkSync(filePath);
+    res.json({ deleted: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings', async (req, res) => {
+  try {
+    const entries = req.body;
+    await saveSaltySettings(entries);
+    res.json({ saved: Object.keys(entries).length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── LOGO UPLOAD ───
+app.post('/api/settings/logo', async (req, res) => {
+  try {
+    const { base64, filename } = req.body;
+    if (!base64 || !filename) return res.status(400).json({ error: 'Missing base64 or filename' });
+
+    // Sanitize filename
+    const sanitized = filename.replace(/[^a-z0-70-9.]/gi, '_').toLowerCase();
+    const finalName = `${Date.now()}_${sanitized}`;
+    const filePath = join(UPLOADS_DIR, finalName);
+
+    // Write file
+    const buffer = Buffer.from(base64.split(',')[1] || base64, 'base64');
+    writeFileSync(filePath, buffer);
+
+    const logoUrl = `/uploads/${finalName}`;
+    
+    // Auto-update settings in DB & File
+    await saveSaltySettings({ logoUrl });
+
+    res.json({ success: true, logoUrl });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── VERSION ───
+app.get('/api/version', async (req, res) => {
+  try {
+    // 1. Check for manual override in settings
+    const settings = await getSaltySettings();
+    if (settings.version) {
+      return res.json({ version: settings.version, type: 'manual' });
+    }
+
+    // 2. Fallback to git info
+    const git = getLocalGitInfo();
+    const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'server', 'package.json'), 'utf-8'));
+    res.json({ version: pkg.version || '1.0.0', git, type: 'git' });
+  } catch (err) {
+    res.json({ version: '1.0.0', error: err.message });
+  }
+});
+
+const A0_SCHEDULER_DIR = process.env.A0_SCHEDULER_DIR || join(REPO_ROOT, 'a0-scheduler');
+const A0_TASKS_FILE = join(A0_SCHEDULER_DIR, 'tasks.json');
+
+function readTasks() {
+  try {
+    if (!existsSync(A0_TASKS_FILE)) return [];
+    const data = JSON.parse(readFileSync(A0_TASKS_FILE, 'utf-8'));
+    return data.tasks || [];
+  } catch { return []; }
+}
+
+function writeTasks(tasks) {
+  mkdirSync(A0_SCHEDULER_DIR, { recursive: true });
+  writeFileSync(A0_TASKS_FILE, JSON.stringify({ tasks }, null, 2), 'utf-8');
+}
 
 // ─── BACKUP & RESTORE ───
 app.post('/api/backup', async (req, res) => {
   try {
-    const [kanban, crons, agents, settings, activity] = await Promise.all([
-      pool.query('SELECT * FROM kanban_tasks'),
-      pool.query('SELECT * FROM cron_tasks'),
-      pool.query('SELECT * FROM agents'),
-      pool.query('SELECT * FROM settings'),
-      pool.query('SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT 1000'),
-    ]);
+    let kanban = [], crons = [], agents = [], settings = [], activity = [];
+    try {
+      const [k, c, a, s, al] = await Promise.all([
+        pool.query('SELECT * FROM kanban_tasks'),
+        pool.query('SELECT * FROM cron_tasks'),
+        pool.query('SELECT * FROM agents'),
+        pool.query('SELECT * FROM settings'),
+        pool.query('SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT 1000'),
+      ]);
+      kanban = k.rows; crons = c.rows; agents = a.rows; settings = s.rows; activity = al.rows;
+    } catch (dbErr) {
+      console.warn("DB offline during backup, skipping DB tables:", dbErr.message);
+    }
+    
     const backup = {
       version: '1.0.0',
       timestamp: new Date().toISOString(),
       data: {
-        kanban: kanban.rows,
-        crons: crons.rows,
-        agents: agents.rows,
-        settings: settings.rows,
-        activity: activity.rows,
+        kanban, crons, agents, settings, activity,
+        a0Tasks: readTasks(),
       },
     };
     // Save to filesystem too
-    const backupDir = '/app/backups';
+    const backupDir = join(REPO_ROOT, 'backups');
     mkdirSync(backupDir, { recursive: true });
     const filename = `salty-os-backup-${Date.now()}.json`;
     writeFileSync(join(backupDir, filename), JSON.stringify(backup, null, 2));
@@ -550,68 +730,91 @@ app.post('/api/backup', async (req, res) => {
 app.post('/api/restore', async (req, res) => {
   const { data } = req.body;
   if (!data) return res.status(400).json({ error: 'No backup data provided' });
-  const client = await pool.connect();
+  
+  let dbRestored = false;
   try {
-    await client.query('BEGIN');
-    // Clear and restore each table
-    if (data.kanban) {
-      await client.query('DELETE FROM kanban_tasks');
-      for (const t of data.kanban) {
-        await client.query(
-          `INSERT INTO kanban_tasks (id,title,description,status,priority,agent,tags,due_date,created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-          [t.id, t.title, t.description, t.status, t.priority, t.agent, t.tags, t.due_date, t.created_at]
-        );
-      }
-    }
-    if (data.crons) {
-      await client.query('DELETE FROM cron_tasks');
-      for (const c of data.crons) {
-        await client.query(
-          `INSERT INTO cron_tasks (id,name,type,project,state,minute,hour,day,month,weekday,agent,description,enabled,created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
-          [c.id,c.name,c.type,c.project,c.state,c.minute,c.hour,c.day,c.month,c.weekday,c.agent,c.description,c.enabled,c.created_at]
-        );
-      }
-    }
-    if (data.agents) {
-      await client.query('DELETE FROM agents');
-      for (const a of data.agents) {
-        await client.query(
-          `INSERT INTO agents (id,name,role,department,status,avatar,color,doc,config,created_at)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
-          [a.id,a.name,a.role,a.department,a.status,a.avatar,a.color,a.doc,a.config,a.created_at]
-        );
-      }
-    }
-    if (data.settings) {
-      await client.query('DELETE FROM settings');
-        for (const s of data.settings) {
-          let jsonStr;
-          if (typeof s.value === "string") {
-            // if it is already JSON, keep it; otherwise wrap as JSON string
-            try { JSON.parse(s.value); jsonStr = s.value; }
-            catch { jsonStr = JSON.stringify(s.value); }
-          } else {
-            jsonStr = JSON.stringify(s.value);
-          }
-          await client.query("INSERT INTO settings (key,value) VALUES ($1,$2::jsonb)", [s.key, jsonStr]);
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      // Clear and restore each table
+      if (data.kanban) {
+        await client.query('DELETE FROM kanban_tasks');
+        for (const t of data.kanban) {
+          await client.query(
+            `INSERT INTO kanban_tasks (id,title,description,status,priority,agent,tags,due_date,created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+            [t.id, t.title, t.description, t.status, t.priority, t.agent, t.tags, t.due_date, t.created_at]
+          );
         }
+      }
+      if (data.crons) {
+        await client.query('DELETE FROM cron_tasks');
+        for (const c of data.crons) {
+          await client.query(
+            `INSERT INTO cron_tasks (id,name,type,project,state,minute,hour,day,month,weekday,agent,description,enabled,created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+            [c.id,c.name,c.type,c.project,c.state,c.minute,c.hour,c.day,c.month,c.weekday,c.agent,c.description,c.enabled,c.created_at]
+          );
+        }
+      }
+      if (data.agents) {
+        await client.query('DELETE FROM agents');
+        for (const a of data.agents) {
+          await client.query(
+            `INSERT INTO agents (id,name,role,department,status,avatar,color,doc,config,created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+            [a.id,a.name,a.role,a.department,a.status,a.avatar,a.color,a.doc,a.config,a.created_at]
+          );
+        }
+      }
+      if (data.settings) {
+        await client.query('DELETE FROM settings');
+          for (const s of data.settings) {
+            let jsonStr;
+            if (typeof s.value === "string") {
+              try { JSON.parse(s.value); jsonStr = s.value; }
+              catch { jsonStr = JSON.stringify(s.value); }
+            } else {
+              jsonStr = JSON.stringify(s.value);
+            }
+            await client.query("INSERT INTO settings (key,value) VALUES ($1,$2::jsonb)", [s.key, jsonStr]);
+          }
+      }
+      await client.query('COMMIT');
+      dbRestored = true;
+    } catch (err) {
+      await client.query('ROLLBACK');
+      console.warn("DB restore failed partway, rolled back:", err.message);
+    } finally {
+      client.release();
     }
-    await client.query('COMMIT');
-    await logActivity('system', 'backup_restored', 'Full restore completed', 'system');
-    res.json({ restored: true, tables: { kanban: data.kanban?.length, crons: data.crons?.length, agents: data.agents?.length, settings: data.settings?.length } });
+  } catch (dbconnErr) {
+    console.warn("DB offline during restore, skipping DB tables.", dbconnErr.message);
+  }
+
+  try {
+    // Also restore A0 tasks if present
+    let a0Restored = false;
+    if (data.a0Tasks) {
+      writeTasks(data.a0Tasks);
+      a0Restored = true;
+    }
+    
+    // Always return success if we processed the file, even if DB was offline
+    res.json({ 
+      restored: true, 
+      dbRestored, 
+      a0Restored,
+      tables: { kanban: data.kanban?.length, crons: data.crons?.length, agents: data.agents?.length, settings: data.settings?.length, a0Tasks: data.a0Tasks?.length } 
+    });
   } catch (err) {
-    await client.query('ROLLBACK');
     res.status(500).json({ error: err.message });
-  } finally {
-    client.release();
   }
 });
 
 // ─── BACKUP LIST ───
 app.get('/api/backups', async (req, res) => {
-  const backupDir = '/app/backups';
+  const backupDir = join(REPO_ROOT, 'backups');
   mkdirSync(backupDir, { recursive: true });
   try {
     const files = readdirSync(backupDir)
@@ -630,9 +833,9 @@ app.get('/api/backups', async (req, res) => {
 // ═══════════════════════════════════════════
 // A0 AGENTS — File-based CRUD (shared volume)
 // Reads/writes /a0-agents which is bind-mounted
-// to the same dir as Agent Zero's /a0/agents
+// to the same dir as OpenClaw's /a0/agents
 // ═══════════════════════════════════════════
-const A0_AGENTS_DIR = process.env.A0_AGENTS_DIR || '/a0-agents';
+const A0_AGENTS_DIR = process.env.A0_AGENTS_DIR || join(REPO_ROOT, 'a0-agents');
 
 // Helper: recursively read a directory tree
 function readDirTree(dirPath, basePath = '') {
@@ -834,23 +1037,8 @@ app.put('/api/a0/agents-profile/:key/rename', (req, res) => {
 // ═══════════════════════════════════════════
 // A0 SCHEDULER — File-based CRUD (shared volume)
 // Reads/writes /a0-scheduler/tasks.json which is
-// bind-mounted to Agent Zero's /a0/usr/scheduler
+// bind-mounted to OpenClaw's /a0/usr/scheduler
 // ═══════════════════════════════════════════
-const A0_SCHEDULER_DIR = process.env.A0_SCHEDULER_DIR || '/a0-scheduler';
-const A0_TASKS_FILE = join(A0_SCHEDULER_DIR, 'tasks.json');
-
-function readTasks() {
-  try {
-    if (!existsSync(A0_TASKS_FILE)) return [];
-    const data = JSON.parse(readFileSync(A0_TASKS_FILE, 'utf-8'));
-    return data.tasks || [];
-  } catch { return []; }
-}
-
-function writeTasks(tasks) {
-  mkdirSync(A0_SCHEDULER_DIR, { recursive: true });
-  writeFileSync(A0_TASKS_FILE, JSON.stringify({ tasks }, null, 2), 'utf-8');
-}
 
 function genUUID(len = 8) {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
@@ -940,7 +1128,60 @@ app.delete('/api/a0/scheduler/:uuid', (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ─── SERVICE PROXY — Agent Zero ───
+// ─── INTEGRATED OPENCLAW EXPORT ───
+// This is the "Single Source of Truth" endpoint OpenClaw calls to fetch all data
+app.get('/api/openclaw/export', (req, res) => {
+  try {
+    // 1. Fetch Agents (profiles + files)
+    let agents = [];
+    if (existsSync(A0_AGENTS_DIR)) {
+      agents = readdirSync(A0_AGENTS_DIR, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => {
+          const agentDir = join(A0_AGENTS_DIR, d.name);
+          const jsonPath = join(agentDir, 'agent.json');
+          const contextPath = join(agentDir, '_context.md');
+          
+          // Fix: Agent Zero/OpenClaw stores prompts in a /prompts folder
+          const rolePath = join(agentDir, 'prompts', 'agent.system.main.role.md');
+          
+          let agentJson = '{}';
+          let contextMd = '';
+          let roleMd = '';
+          try { agentJson = readFileSync(jsonPath, 'utf-8'); } catch {}
+          try { contextMd = readFileSync(contextPath, 'utf-8'); } catch {}
+          try { roleMd = readFileSync(rolePath, 'utf-8'); } catch {}
+          return { key: d.name, agentJson, contextMd, roleMd };
+        });
+    }
+
+    // 2. Fetch Scheduler Tasks
+    const scheduler = { tasks: readTasks() };
+
+    // 3. Fetch Skills
+    let skills = [];
+    if (existsSync(SKILLS_DIR)) {
+      skills = readdirSync(SKILLS_DIR)
+        .filter(f => f.endsWith('.md'))
+        .map(f => ({
+          name: f,
+          content: readFileSync(join(SKILLS_DIR, f), 'utf-8')
+        }));
+    }
+
+    res.json({ 
+      timestamp: new Date().toISOString(),
+      version: "2.0.0",
+      agents, 
+      scheduler, 
+      skills 
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── SERVICE PROXY — OpenClaw ───
 // ─── AGENT ZERO SESSION MANAGEMENT (Login + CSRF) ───
 const a0Session = { cookie: null, csrfToken: null, lastRefresh: 0 };
 const A0_URL = process.env.AGENT_ZERO_URL || 'http://agent-zero:80';
@@ -1030,7 +1271,7 @@ app.all('/api/proxy/agent-zero/*', async (req, res) => {
     try { res.status(response.status).json(JSON.parse(text)); }
     catch { res.status(response.status).send(text); }
   } catch (err) {
-    res.status(502).json({ error: `Agent Zero unreachable: ${err.message}` });
+    res.status(502).json({ error: `OpenClaw unreachable: ${err.message}` });
   }
 });
 
@@ -1076,14 +1317,136 @@ app.get('/api/services', async (req, res) => {
   res.json(results);
 });
 
-// ─── UPDATE TRIGGER ───
-app.post('/api/update/check', async (req, res) => {
+// ═══════════════════════════════════════════
+// UPDATE SYSTEM — GitHub API + safe git pull
+// ═══════════════════════════════════════════
+
+// Helper: get local git info
+function getLocalGitInfo() {
   try {
-    const result = execSync('cd /app && git fetch origin main --dry-run 2>&1', { encoding: 'utf-8', timeout: 10000 });
-    const behind = result.includes('main') || result.trim().length > 0;
-    res.json({ updateAvailable: behind, output: result.trim() });
+    const commit = execSync('git rev-parse HEAD', { cwd: REPO_ROOT, encoding: 'utf-8' }).trim();
+    const short  = execSync('git rev-parse --short HEAD', { cwd: REPO_ROOT, encoding: 'utf-8' }).trim();
+    const branch = execSync('git rev-parse --abbrev-ref HEAD', { cwd: REPO_ROOT, encoding: 'utf-8' }).trim();
+    const msg    = execSync('git log -1 --pretty=%s', { cwd: REPO_ROOT, encoding: 'utf-8' }).trim();
+    const date   = execSync('git log -1 --pretty=%ci', { cwd: REPO_ROOT, encoding: 'utf-8' }).trim();
+    return { commit, short, branch, message: msg, date, error: null };
   } catch (err) {
-    res.json({ updateAvailable: false, error: err.message });
+    return { commit: null, short: null, branch: 'main', message: null, date: null, error: err.message };
+  }
+}
+
+// GET /api/update/status — current local git state
+app.get('/api/update/status', (req, res) => {
+  res.json(getLocalGitInfo());
+});
+
+// GET /api/update/check — compare local HEAD to GitHub remote
+app.get('/api/update/check', async (req, res) => {
+  try {
+    const local = getLocalGitInfo();
+
+    // Get repo from settings (fall back to env or default)
+    let repo = process.env.GITHUB_REPO || 'Liquidt2/Salty-OS';
+    try {
+      const { rows } = await pool.query("SELECT value FROM settings WHERE key = 'githubRepo'");
+      if (rows[0]?.value) repo = String(rows[0].value).replace(/^"|"$/g, '');
+    } catch { /* DB may not be available; use default */ }
+
+    const branch = local.branch || 'main';
+
+    // Call GitHub API (60 req/hour unauthenticated; set GITHUB_TOKEN env to raise limit)
+    const ghHeaders = { 'User-Agent': 'SaltyOS-Updater', Accept: 'application/vnd.github.v3+json' };
+    if (process.env.GITHUB_TOKEN) ghHeaders['Authorization'] = `Bearer ${process.env.GITHUB_TOKEN}`;
+
+    const ghRes = await fetch(`https://api.github.com/repos/${repo}/commits/${branch}`, { headers: ghHeaders });
+
+    if (!ghRes.ok) {
+      return res.json({ local, remote: null, upToDate: true, error: `GitHub API returned ${ghRes.status}` });
+    }
+
+    const ghData = await ghRes.json();
+    const remoteCommit = ghData.sha || '';
+    const remoteShort  = remoteCommit.slice(0, 7);
+    const remoteMsg    = ghData.commit?.message?.split('\n')[0] || '';
+    const remoteDate   = ghData.commit?.author?.date || '';
+    const remoteAuthor = ghData.commit?.author?.name || '';
+
+    res.json({
+      local,
+      remote: { commit: remoteCommit, short: remoteShort, message: remoteMsg, date: remoteDate, author: remoteAuthor },
+      upToDate: local.commit === remoteCommit,
+      repo,
+      branch,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/update/apply — auto-backup → git pull → log result
+app.post('/api/update/apply', async (req, res) => {
+  const steps = [];
+  const log = (msg) => { steps.push(msg); console.log('[UPDATE]', msg); };
+
+  try {
+    log('Starting update — creating safety backup first...');
+
+    // Step 1: auto-backup all DB data (same logic as /api/backup)
+    let backupFile = null;
+    try {
+      const [kanban, crons, agents, settings, activity] = await Promise.all([
+        pool.query('SELECT * FROM kanban_tasks'),
+        pool.query('SELECT * FROM cron_tasks'),
+        pool.query('SELECT * FROM agents'),
+        pool.query('SELECT * FROM settings'),
+        pool.query('SELECT * FROM activity_logs ORDER BY created_at DESC LIMIT 1000'),
+      ]);
+      const backup = {
+        version: '1.0.0',
+        timestamp: new Date().toISOString(),
+        triggeredBy: 'auto-update',
+        data: { kanban: kanban.rows, crons: crons.rows, agents: agents.rows, settings: settings.rows, activity: activity.rows },
+      };
+      const backupDir = join(REPO_ROOT, 'backups');
+      mkdirSync(backupDir, { recursive: true });
+      backupFile = join(backupDir, `pre-update-${Date.now()}.json`);
+      writeFileSync(backupFile, JSON.stringify(backup, null, 2));
+      log(`✅ Backup saved: ${backupFile}`);
+    } catch (dbErr) {
+      log(`⚠️  DB backup skipped (DB may be offline): ${dbErr.message}`);
+    }
+
+    // Step 2: stash any local changes to avoid conflicts
+    try {
+      execSync('git stash --include-untracked', { cwd: REPO_ROOT, encoding: 'utf-8' });
+      log('📦 Local changes stashed (will be restored after pull)');
+    } catch { log('ℹ️  Nothing to stash'); }
+
+    // Step 3: git pull
+    log('⬇️  Running git pull...');
+    const pullOutput = execSync('git pull --ff-only', { cwd: REPO_ROOT, encoding: 'utf-8', timeout: 30000 }).trim();
+    log(`✅ git pull: ${pullOutput}`);
+
+    // Step 4: restore stash if we stashed anything
+    try {
+      execSync('git stash pop', { cwd: REPO_ROOT, encoding: 'utf-8' });
+      log('✅ Local changes restored from stash');
+    } catch { log('ℹ️  No stash to restore'); }
+
+    // Step 5: get new commit info
+    const newInfo = getLocalGitInfo();
+    log(`🆕 Now at commit ${newInfo.short}: ${newInfo.message}`);
+
+    // Log to activity
+    try { await logActivity('system', 'update_applied', `Updated to ${newInfo.short}: ${newInfo.message}`, 'system'); } catch {}
+
+    res.json({ success: true, steps, newCommit: newInfo, backupFile });
+
+  } catch (err) {
+    log(`❌ Update failed: ${err.message}`);
+    // Attempt to restore stash on failure
+    try { execSync('git stash pop', { cwd: REPO_ROOT, encoding: 'utf-8' }); log('↩️  Rolled back local changes from stash'); } catch {}
+    res.status(500).json({ success: false, error: err.message, steps });
   }
 });
 

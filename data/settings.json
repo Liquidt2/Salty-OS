@@ -1,0 +1,36 @@
+{
+  "companyName": "BKE Logistics",
+  "companyTitle": "Freight Brokerage Operations Hub",
+  "logoUrl": "/uploads/1773513644956_logo.png",
+  "accentColor": "#00E5FF",
+  "kanbanColumns": {
+    "backlog": {
+      "label": "Backlog",
+      "enabled": true
+    },
+    "todo": {
+      "label": "To-Do",
+      "enabled": true
+    },
+    "inProgress": {
+      "label": "In Progress",
+      "enabled": true
+    },
+    "inReview": {
+      "label": "In Review",
+      "enabled": true
+    },
+    "done": {
+      "label": "Done",
+      "enabled": true
+    }
+  },
+  "agentZeroUrl": "http://openclaw:5000",
+  "n8nUrl": "http://n8n:5678",
+  "postizUrl": "http://postiz:5000",
+  "firecrawlUrl": "http://firecrawl:3002",
+  "gotenbergUrl": "http://gotenberg:3000",
+  "githubRepo": "bke-logistics/salty-os",
+  "githubBranch": "main",
+  "version": "v3.0.0-Beta"
+}

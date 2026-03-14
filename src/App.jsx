@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 
 // ═══════════════════════════════════════════
 // SALTY OS v2 — Source of Truth Dashboard
-// BKE Logistics × Agent Zero Command Center
+// BKE Logistics × OpenClaw Command Center
 // ═══════════════════════════════════════════
 
 const ACCENT = {
@@ -121,6 +121,7 @@ const I = {
   refresh: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>,
   check: <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="20 6 9 17 4 12"/></svg>,
   play: <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>,
+  chat: <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>,
 };
 
 // ─── Styles ───
@@ -194,7 +195,57 @@ function StatusDot({ status }) {
   </span>);
 }
 
-// ─── State Toggle (Agent Zero style) ───
+function LogoPicker({ value, onChange, s, accent }) {
+  const [drag, setDrag] = useState(false);
+  const fileRef = useRef();
+
+  const handleFile = (file) => {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const base64 = e.target.result;
+      try {
+        const res = await api('/settings/logo', { method: 'POST', body: { base64, filename: file.name } });
+        if (res?.success) onChange(res.logoUrl);
+      } catch (err) { console.error("Logo upload failed", err); }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  return (
+    <div style={{ marginBottom: 20 }}>
+      <label style={{ display: "block", fontSize: 13, fontWeight: 600, color: ACCENT.cyan, marginBottom: 8 }}>Company Logo</label>
+      <div 
+        onDragOver={e => { e.preventDefault(); setDrag(true); }}
+        onDragLeave={() => setDrag(false)}
+        onDrop={e => { e.preventDefault(); setDrag(false); handleFile(e.dataTransfer.files[0]); }}
+        onClick={() => fileRef.current.click()}
+        style={{ 
+          width: "100%", height: 120, borderRadius: 20, border: `2px dashed ${drag ? accent : s.border}`, 
+          background: drag ? accent + "10" : s.bgInput, display: "flex", flexDirection: "column", 
+          alignItems: "center", justifyContent: "center", cursor: "pointer", transition: "all 0.3s",
+          position: "relative", overflow: "hidden"
+        }}
+      >
+        <input type="file" ref={fileRef} style={{ display: "none" }} onChange={e => handleFile(e.target.files[0])} accept="image/*" />
+        {value ? (
+          <div style={{ padding: 12, display: "flex", alignItems: "center", gap: 16 }}>
+             <img src={value.startsWith('http') ? value : `${API.replace('/api','')}${value}`} style={{ height: 60, width: 60, objectFit: "contain", borderRadius: 8, background: "#fff" }} alt="Logo Preview" />
+             <div style={{ fontSize: 11, color: s.textMuted }}>Click or drag to replace<br/><span style={{ color: accent, fontWeight: 700 }}>Custom Logo Active</span></div>
+          </div>
+        ) : (
+          <>
+            <div style={{ color: s.textMuted, marginBottom: 8 }}>{I.upload}</div>
+            <div style={{ fontSize: 12, fontWeight: 600, color: s.textMuted }}>Drag & Drop or Click to Upload</div>
+            <div style={{ fontSize: 10, color: s.textDim, marginTop: 4 }}>PNG, JPG or SVG (Max 5MB)</div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── State Toggle (OpenClaw style) ───
 function StateToggle({ value, onChange, s }) {
   const states = [{ key: "idle", label: "Idle", color: STATE_COLORS.idle }, { key: "running", label: "Running", color: STATE_COLORS.running }, { key: "disabled", label: "Disabled", color: STATE_COLORS.disabled }, { key: "error", label: "Error", color: STATE_COLORS.error }];
   return (<div style={{ marginBottom: 16 }}>
@@ -207,7 +258,7 @@ function StateToggle({ value, onChange, s }) {
   </div>);
 }
 
-// ─── Cron Fields (Agent Zero style) ───
+// ─── Cron Fields (OpenClaw style) ───
 function CronFields({ minute, hour, day, month, weekday, onChange, s }) {
   const f = [{ k: "minute", l: "Minute", v: minute }, { k: "hour", l: "Hour", v: hour }, { k: "day", l: "Day", v: day }, { k: "month", l: "Month", v: month }, { k: "weekday", l: "Weekday", v: weekday }];
   return (<div style={{ marginBottom: 16 }}>
@@ -402,7 +453,7 @@ function AgentsPage({ s, accent, agents, setAgents, a0Agents }) {
 
   return (<div>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 28, flexWrap: 'wrap', gap: 12 }}>
-      <div><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Agent Zero Profiles</h1><div style={{ fontSize: 13, color: s.textMuted, marginTop: 4 }}>File-based agent profiles synced with Agent Zero at <code style={{ color: ACCENT.cyan, fontFamily: "'JetBrains Mono'", fontSize: 12 }}>/a0/agents</code></div></div>
+      <div><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>OpenClaw Profiles</h1><div style={{ fontSize: 13, color: s.textMuted, marginTop: 4 }}>File-based agent profiles synced with OpenClaw at <code style={{ color: ACCENT.cyan, fontFamily: "'JetBrains Mono'", fontSize: 12 }}>/a0/agents</code></div></div>
       <div style={{ display: 'flex', gap: 10 }}><Btn s={s} variant="ghost" onClick={loadProfiles}>{I.refresh} Refresh</Btn><Btn s={s} onClick={() => setCreateModal(true)}>{I.plus} New Profile</Btn></div>
     </div>
 
@@ -480,9 +531,9 @@ function AgentsPage({ s, accent, agents, setAgents, a0Agents }) {
 
     {/* Create Agent Modal */}
     <Modal open={createModal} onClose={() => setCreateModal(false)} title="Create Agent Profile" s={s}>
-      <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 16, lineHeight: 1.5 }}>Creates a new folder in <code style={{ color: ACCENT.cyan }}>/a0/agents/</code> with the standard Agent Zero structure: agent.json, _context.md, and prompt files.</div>
+      <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 16, lineHeight: 1.5 }}>Creates a new folder in <code style={{ color: ACCENT.cyan }}>/a0/agents/</code> with the standard OpenClaw structure: agent.json, _context.md, and prompt files.</div>
       <Inp label="Folder Name (key)" hint="Lowercase, no spaces. This becomes the folder name." value={newAgent.key} onChange={e => setNewAgent({ ...newAgent, key: e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '') })} s={s} placeholder="e.g. klaus" mono />
-      <Inp label="Display Name" hint="Name shown in Agent Zero UI" value={newAgent.label} onChange={e => setNewAgent({ ...newAgent, label: e.target.value })} s={s} placeholder="e.g. Klaus — COO" />
+      <Inp label="Display Name" hint="Name shown in OpenClaw UI" value={newAgent.label} onChange={e => setNewAgent({ ...newAgent, label: e.target.value })} s={s} placeholder="e.g. Klaus — COO" />
       <Inp label="Context (_context.md)" value={newAgent.context} onChange={e => setNewAgent({ ...newAgent, context: e.target.value })} s={s} multiline placeholder="Agent context information..." />
       <Inp label="Role Prompt (agent.system.main.role.md)" value={newAgent.role_prompt} onChange={e => setNewAgent({ ...newAgent, role_prompt: e.target.value })} s={s} multiline placeholder="You are Klaus, the Chief Operations Officer for BKE Logistics..." />
       <div style={{ display: 'flex', gap: 12, marginTop: 8 }}><Btn s={s} onClick={createAgent} style={{ flex: 1 }}>Create Profile</Btn><Btn s={s} variant="ghost" onClick={() => setCreateModal(false)}>Cancel</Btn></div>
@@ -502,14 +553,14 @@ function AgentsPage({ s, accent, agents, setAgents, a0Agents }) {
       <div style={{ padding: 16, background: ACCENT.red + '10', border: `1px solid ${ACCENT.red}25`, borderRadius: 14, marginBottom: 16 }}>
         <div style={{ color: ACCENT.red, fontSize: 14, fontWeight: 700, marginBottom: 6 }}>⚠️ This will permanently delete:</div>
         <code style={{ color: s.text, fontSize: 13, fontFamily: "'JetBrains Mono'" }}>/a0/agents/{confirmDelete}/</code>
-        <div style={{ color: s.textMuted, fontSize: 13, marginTop: 8 }}>This removes the agent from Agent Zero. This action cannot be undone.</div>
+        <div style={{ color: s.textMuted, fontSize: 13, marginTop: 8 }}>This removes the agent from OpenClaw. This action cannot be undone.</div>
       </div>
       <div style={{ display: 'flex', gap: 12 }}><Btn s={s} variant="danger" onClick={() => deleteAgent(confirmDelete)}>Delete Permanently</Btn><Btn s={s} variant="ghost" onClick={() => setConfirmDelete(null)}>Cancel</Btn></div>
     </Modal>
   </div>);
 }
 
-// ─── SCHEDULER (Agent Zero Style) ───
+// ─── SCHEDULER (OpenClaw Style) ───
 function SchedulerPage({ s, accent }) {
   const [tasks, setTasks] = useState([]);
   const [modal, setModal] = useState(false);
@@ -549,10 +600,10 @@ function SchedulerPage({ s, accent }) {
         <Btn s={s} accent={accent} onClick={() => { setForm(empty); setModal(true); }}>{I.plus} Create Task</Btn>
       </div>
     </div>
-    <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 24 }}>Live from Agent Zero — <code style={{ color: ACCENT.cyan, fontFamily: "'JetBrains Mono'", fontSize: 12 }}>/a0/usr/scheduler/tasks.json</code> — {tasks.length} task{tasks.length !== 1 ? 's' : ''}</div>
+    <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 24 }}>Live from OpenClaw — <code style={{ color: ACCENT.cyan, fontFamily: "'JetBrains Mono'", fontSize: 12 }}>/a0/usr/scheduler/tasks.json</code> — {tasks.length} task{tasks.length !== 1 ? 's' : ''}</div>
 
     {loading ? <div style={{ color: s.textMuted, padding: 40, textAlign: "center" }}>Loading tasks...</div> :
-    tasks.length === 0 ? <div style={{ color: s.textMuted, padding: 40, textAlign: "center", background: s.bgCard, borderRadius: 16, border: `1px solid ${s.border}` }}>No scheduled tasks. Create one or add tasks in Agent Zero.</div> :
+    tasks.length === 0 ? <div style={{ color: s.textMuted, padding: 40, textAlign: "center", background: s.bgCard, borderRadius: 16, border: `1px solid ${s.border}` }}>No scheduled tasks. Create one or add tasks in OpenClaw.</div> :
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
       {tasks.map(t => (<Card key={t.uuid} color={STATE_COLORS[t.state] || ACCENT.cyan} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow, cursor: "pointer" }} onClick={() => setViewTask(t)}>
         <div style={{ padding: "18px 20px 18px 22px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
@@ -688,26 +739,236 @@ function LogsPage({ s, accent }) {
 }
 
 function OrgChartPage({ s }) {
-  const Node = ({ name, role, color = ACCENT.cyan, large }) => (<div style={{ background: s.bgCard, border: `1px solid ${s.border}`, borderRadius: 18, padding: large ? "18px 28px" : "12px 20px", textAlign: "center", boxShadow: s.shadow, position: "relative", minWidth: large ? 160 : 120 }}><div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, borderRadius: "18px 0 0 18px", background: color }} /><div style={{ fontSize: large ? 16 : 13, fontWeight: 800, color: s.text }}>{name}</div><div style={{ fontSize: large ? 12 : 11, color, fontWeight: 600, marginTop: 2 }}>{role}</div></div>);
-  const Line = ({ h = 24 }) => <div style={{ width: 2, height: h, background: s.border, margin: "0 auto" }} />;
-  return (<div><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif", marginBottom: 28 }}>Organization Chart</h1>
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", overflow: "auto", padding: 20 }}>
-      <Node name="Harvey" role="CEO" color={ACCENT.cyan} large /><Line h={32} />
-      <Node name="Klaus" role="COO · Agent Zero" color={ACCENT.green} large /><Line h={32} />
-      <div style={{ width: "100%", display: "flex", justifyContent: "center" }}><div style={{ height: 2, background: s.border, width: "75%", position: "relative" }}>{[0,25,50,75,100].map(p => <div key={p} style={{ position: "absolute", left: `${p}%`, top: 0, width: 2, height: 24, background: s.border }} />)}</div></div><div style={{ height: 24 }} />
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 16, width: "100%", maxWidth: 900 }}>
-        {[{ d: "Engineering", c: ACCENT.cyan, a: [{ n: "Cipher", r: "Eng Lead" }] }, { d: "Sales", c: ACCENT.amber, a: [{ n: "Axel", r: "Sales" }, { n: "Vex", r: "Email" }] }, { d: "Operations", c: ACCENT.green, a: [{ n: "Rook", r: "Ops" }, { n: "Slate", r: "Contracts" }, { n: "Echo", r: "Research" }] }, { d: "Social Media", c: ACCENT.purple, a: [{ n: "Nova", r: "Social" }, { n: "Pixel", r: "Content" }] }].map(dept => (
-          <div key={dept.d} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
-            <div style={{ background: dept.c + "15", borderRadius: 14, padding: "10px 20px", textAlign: "center", border: `1px solid ${dept.c}25`, width: "100%" }}><div style={{ fontSize: 13, fontWeight: 800, color: dept.c }}>{dept.d}</div></div><Line />
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%" }}>{dept.a.map(a => <Node key={a.n} name={a.n} role={a.r} color={dept.c} />)}</div>
-          </div>))}
+  // ── Avatar circle ──
+  const Avatar = ({ emoji, color, size = 52 }) => (
+    <div style={{
+      width: size, height: size, borderRadius: size * 0.28, flexShrink: 0,
+      background: `linear-gradient(135deg, ${color}30, ${color}12)`,
+      border: `2px solid ${color}50`,
+      display: "flex", alignItems: "center", justifyContent: "center",
+      fontSize: size * 0.44, boxShadow: `0 0 16px ${color}25`,
+    }}>{emoji}</div>
+  );
+
+  // ── CEO / COO top-tier card ──
+  const LeaderCard = ({ role, name, emoji, color, tags, wide }) => (
+    <div style={{
+      display: "flex", alignItems: "center", gap: 18,
+      background: s.bgCard, border: `1px solid ${color}35`,
+      borderRadius: 20, padding: "22px 28px",
+      boxShadow: `0 4px 32px ${color}18, ${s.shadow}`,
+      width: wide ? 560 : 420, maxWidth: "100%",
+      position: "relative", overflow: "hidden",
+    }}>
+      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, background: color, borderRadius: "20px 0 0 20px" }} />
+      <Avatar emoji={emoji} color={color} size={58} />
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color, letterSpacing: 2, textTransform: "uppercase", marginBottom: 2 }}>{role}</div>
+        <div style={{ fontSize: 26, fontWeight: 800, color: s.text, fontFamily: "'Space Grotesk'", letterSpacing: -0.5, marginBottom: 4 }}>{name}</div>
+        <div style={{ fontSize: 13, color: s.textMuted, lineHeight: 1.5 }}>{tags}</div>
       </div>
     </div>
-  </div>);
+  );
+
+  // ── C-Suite card (CTO / CMO / CRO) ──
+  const CSuiteCard = ({ role, name, emoji, color, desc }) => (
+    <div style={{
+      background: s.bgCard, border: `1px solid ${color}30`,
+      borderRadius: 18, padding: "20px 22px",
+      boxShadow: `0 2px 20px ${color}12`,
+      position: "relative", overflow: "hidden", flex: 1, minWidth: 260,
+    }}>
+      <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 4, background: color, borderRadius: "18px 0 0 18px" }} />
+      <div style={{ display: "flex", alignItems: "center", gap: 14, marginBottom: 12 }}>
+        <Avatar emoji={emoji} color={color} size={48} />
+        <div>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ fontSize: 20, fontWeight: 800, color: s.text, fontFamily: "'Space Grotesk'" }}>{name}</div>
+            <span style={{ fontSize: 10, fontWeight: 700, padding: "3px 8px", borderRadius: 6, background: color + "20", color, letterSpacing: 0.5, textTransform: "uppercase" }}>{role}</span>
+          </div>
+          <div style={{ fontSize: 11, color, fontWeight: 600, marginTop: 2 }}>{
+            role === "CTO" ? "Chief Technology Officer" :
+            role === "CMO" ? "Chief Marketing Officer" :
+            "Chief Revenue Officer"
+          }</div>
+        </div>
+      </div>
+      <div style={{ fontSize: 13, color: s.textMuted, lineHeight: 1.6, paddingLeft: 2 }}>{desc}</div>
+    </div>
+  );
+
+  // ── Agent sub-card ──
+  const AgentCard = ({ name, emoji, role, color, status = "active" }) => {
+    const sc = status === "active" ? ACCENT.green : status === "idle" ? ACCENT.amber : ACCENT.red;
+    return (
+      <div style={{
+        background: s.bgInput, border: `1px solid ${s.border}`,
+        borderRadius: 14, padding: "14px 16px",
+        display: "flex", flexDirection: "column", gap: 10,
+      }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <Avatar emoji={emoji} color={color} size={38} />
+          <div style={{ flex: 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span style={{ fontSize: 15, fontWeight: 700, color: s.text }}>{name}</span>
+            </div>
+            <div style={{ fontSize: 12, color: s.textMuted, marginTop: 1 }}>{role}</div>
+          </div>
+        </div>
+        <div>
+          <span style={{
+            fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 8,
+            background: sc + "18", color: sc, display: "inline-flex", alignItems: "center", gap: 5,
+          }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: sc, display: "inline-block" }} />
+            {status.charAt(0).toUpperCase() + status.slice(1)}
+          </span>
+        </div>
+      </div>
+    );
+  };
+
+  // ── Department section ──
+  const DeptSection = ({ name, desc, color, agents }) => (
+    <div style={{
+      background: s.bgCard, border: `1px solid ${s.border}`,
+      borderRadius: 18, padding: "20px 20px", marginBottom: 16,
+    }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ fontSize: 16, fontWeight: 800, color: s.text }}>{name}</div>
+        <span style={{ fontSize: 12, color, fontWeight: 600 }}>{agents.length} agents ▲</span>
+      </div>
+      <div style={{ fontSize: 13, color: s.textMuted, lineHeight: 1.6, marginBottom: 16 }}>{desc}</div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {agents.map(a => <AgentCard key={a.name} {...a} color={color} />)}
+      </div>
+    </div>
+  );
+
+  // ── Connector line ──
+  const VLine = ({ h = 28, color = s.border }) => (
+    <div style={{ width: 2, height: h, background: color, margin: "0 auto" }} />
+  );
+  const HConnector = ({ cols = 3 }) => (
+    <div style={{ display: "flex", justifyContent: "center", width: "100%", marginBottom: 0 }}>
+      <div style={{ height: 2, background: s.border, width: cols === 3 ? "70%" : "50%", position: "relative" }}>
+        {(cols === 3 ? [0, 50, 100] : [0, 100]).map(p => (
+          <div key={p} style={{ position: "absolute", left: `${p}%`, top: 0, width: 2, height: 24, background: s.border, transform: "translateX(-1px)" }} />
+        ))}
+      </div>
+    </div>
+  );
+
+  // ─── DATA ───
+  const columns = [
+    {
+      csuite: { role: "CTO", name: "Rex", emoji: "⚙️", color: ACCENT.cyan, desc: "Technical infrastructure, API integrations, automation pipelines, data engineering, and system reliability." },
+      depts: [
+        {
+          name: "Tech & Automation", desc: "API integrations, workflow automation via n8n, data pipelines, and internal tooling.", color: ACCENT.cyan,
+          agents: [
+            { name: "Cipher", emoji: "🔧", role: "Systems Engineer", status: "active" },
+            { name: "Byte", emoji: "📊", role: "Data & Analytics Engineer", status: "active" },
+          ],
+        },
+        {
+          name: "Operations & Dispatch", desc: "Load tracking, carrier dispatch, TMS coordination, and broker operations support.", color: ACCENT.cyan,
+          agents: [
+            { name: "Rook", emoji: "🚚", role: "Dispatch Coordinator", status: "active" },
+            { name: "Slate", emoji: "📋", role: "Contract & Compliance Specialist", status: "idle" },
+          ],
+        },
+      ],
+    },
+    {
+      csuite: { role: "CMO", name: "Nova", emoji: "🌟", color: ACCENT.purple, desc: "Brand strategy, content direction, social media growth, multi-platform publishing, and audience development." },
+      depts: [
+        {
+          name: "Content & Social", desc: "LinkedIn, X (Twitter), and YouTube content creation, scheduling, and community engagement.", color: ACCENT.purple,
+          agents: [
+            { name: "Pixel", emoji: "🎨", role: "Content Creator", status: "active" },
+            { name: "Echo", emoji: "📢", role: "Social Media Manager", status: "active" },
+            { name: "Hype", emoji: "🎬", role: "Video & Reels Producer", status: "idle" },
+          ],
+        },
+        {
+          name: "Brand & Research", desc: "Market research, competitor analysis, brand positioning, and freight industry thought leadership.", color: ACCENT.purple,
+          agents: [
+            { name: "Sage", emoji: "🔍", role: "Brand & Research Analyst", status: "active" },
+            { name: "Quill", emoji: "✍️", role: "Copywriter & Newsletter Engine", status: "idle" },
+          ],
+        },
+      ],
+    },
+    {
+      csuite: { role: "CRO", name: "Vance", emoji: "💼", color: ACCENT.amber, desc: "Revenue growth, shipper & carrier relationships, sales pipeline management, and freight market intelligence." },
+      depts: [
+        {
+          name: "Sales & Business Dev", desc: "Cold outreach, prospect qualification, email sequences, and pipeline management for shippers.", color: ACCENT.amber,
+          agents: [
+            { name: "Axel", emoji: "📞", role: "Sales Specialist", status: "active" },
+            { name: "Vex", emoji: "📧", role: "Email & Sequence Specialist", status: "active" },
+          ],
+        },
+        {
+          name: "Carrier & Market Intel", desc: "Carrier onboarding, load board monitoring (DAT/Truckstop), rate intelligence, and capacity network.", color: ACCENT.amber,
+          agents: [
+            { name: "Scout", emoji: "🗺️", role: "Carrier Relations & Onboarding", status: "active" },
+            { name: "Atlas", emoji: "📈", role: "Load Board & Rate Analyst", status: "idle" },
+          ],
+        },
+      ],
+    },
+  ];
+
+  return (
+    <div>
+      <h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif", marginBottom: 32 }}>Organization Chart</h1>
+
+      {/* ── CEO ── */}
+      <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+        <LeaderCard role="CEO" name="Harvey" emoji="👔" color={ACCENT.cyan} tags="Vision · Strategy · Leadership · Culture" wide />
+        <VLine h={32} />
+
+        {/* ── COO ── */}
+        <LeaderCard role="COO" name="Klaus" emoji="🤖" color={ACCENT.green} tags="Research · Delegation · Execution · Orchestration" />
+        <VLine h={24} />
+        <HConnector cols={3} />
+        <div style={{ height: 8 }} />
+
+        {/* ── C-Suite Row ── */}
+        <div style={{ display: "flex", gap: 20, width: "100%", maxWidth: 1100, flexWrap: "wrap" }}>
+          {columns.map(col => (
+            <CSuiteCard key={col.csuite.name} {...col.csuite} />
+          ))}
+        </div>
+
+        {/* ── Thin connectors to dept columns ── */}
+        <div style={{ display: "flex", gap: 20, width: "100%", maxWidth: 1100, flexWrap: "wrap", marginTop: 0 }}>
+          {columns.map(col => (
+            <div key={col.csuite.name} style={{ flex: 1, minWidth: 260 }}>
+              <VLine h={24} color={col.csuite.color + "60"} />
+            </div>
+          ))}
+        </div>
+
+        {/* ── Department Columns ── */}
+        <div style={{ display: "flex", gap: 20, width: "100%", maxWidth: 1100, flexWrap: "wrap", alignItems: "flex-start" }}>
+          {columns.map(col => (
+            <div key={col.csuite.name} style={{ flex: 1, minWidth: 260 }}>
+              {col.depts.map(dept => (
+                <DeptSection key={dept.name} {...dept} />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── SETTINGS ───
-function SettingsPage({ s, accent, settings, setSettings, kanban, crons, agents, setKanban, setCrons, setAgents, services }) {
+function SettingsPage({ s, accent, settings, setSettings, kanban, crons, agents, setKanban, setCrons, setAgents, services, loaded }) {
   // Normalize kanbanColumns: legacy array -> object map
   useEffect(() => {
     const kc = settings?.kanbanColumns;
@@ -715,12 +976,13 @@ function SettingsPage({ s, accent, settings, setSettings, kanban, crons, agents,
       const keys = ["backlog","todo","inProgress","inReview","done"];
       const obj = {};
       keys.forEach((k, i) => { obj[k] = { label: kc[i] || k, enabled: true }; });
-      setSettings({ ...settings, kanbanColumns: obj });
+      setSettings(prev => ({ ...prev, kanbanColumns: obj }));
     }
   }, []);
 
   const [backupStatus, setBackupStatus] = useState(null); const [updateStatus, setUpdateStatus] = useState(null); const [saveStatus, setSaveStatus] = useState(null);
   const [backups, setBackups] = useState([{ id: "b1", date: "2026-02-26 08:00", size: "24 KB", label: "Auto-backup" }, { id: "b2", date: "2026-02-25 16:00", size: "22 KB", label: "Pre-update backup" }, { id: "b3", date: "2026-02-24 08:00", size: "19 KB", label: "Auto-backup" }]);
+  const [updateInfo, setUpdateInfo] = useState(null); const [updateLogs, setUpdateLogs] = useState([]);
 
   const saveSettings = async () => {
     setSaveStatus("saving");
@@ -781,9 +1043,43 @@ function SettingsPage({ s, accent, settings, setSettings, kanban, crons, agents,
     input.click();
   };
 
-  return (<div><div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 28 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Settings</h1><Btn s={s} accent={accent} onClick={saveSettings}>{saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "✓ Saved" : "Save Settings"}</Btn></div>
+  const checkUpdate = async () => {
+    setUpdateStatus("checking");
+    try {
+      const res = await api('/update/check');
+      setUpdateInfo(res);
+      setUpdateStatus(res?.upToDate ? "updated" : "available");
+    } catch {
+      setUpdateStatus("error");
+    }
+  };
+
+  const applyUpdate = async () => {
+    setUpdateStatus("updating"); setUpdateLogs(["Starting update process..."]);
+    try {
+      const res = await api('/update/apply', { method: 'POST' });
+      if (!res) throw new Error("Server did not respond or crashed.");
+      setUpdateLogs(res.steps || ["Update applied successfully."]);
+      if (res.newCommit) setUpdateInfo(prev => ({ ...prev, local: res.newCommit, upToDate: true }));
+      setUpdateStatus(res.success ? "success" : "error");
+    } catch (err) {
+      setUpdateLogs(prev => [...prev, `Update failed: ${err.message}`]);
+      setUpdateStatus("error");
+    }
+  };
+
+  return (<div><div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 28 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Settings</h1><Btn s={s} accent={accent} onClick={saveSettings} disabled={!loaded}>{saveStatus === "saving" ? "Saving..." : saveStatus === "saved" ? "✓ Saved" : !loaded ? "Loading..." : "Save Settings"}</Btn></div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(380px, 1fr))", gap: 20 }}>
-      <Card color={ACCENT.cyan} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>Company</div><Inp label="Company Name" value={settings.companyName} onChange={e => setSettings({ ...settings, companyName: e.target.value })} s={s} /><Inp label="Company Title" value={settings.companyTitle} onChange={e => setSettings({ ...settings, companyTitle: e.target.value })} s={s} /><Inp label="Logo URL" value={settings.logoUrl} onChange={e => setSettings({ ...settings, logoUrl: e.target.value })} s={s} placeholder="https://..." /></div></Card>
+      <Card color={ACCENT.cyan} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}>
+        <div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>Branding</div>
+        <LogoPicker value={settings.logoUrl} onChange={v => setSettings(prev => ({ ...prev, logoUrl: v }))} s={s} accent={accent} />
+        <Inp label="Company Name" value={settings.companyName} onChange={e => setSettings(prev => ({ ...prev, companyName: e.target.value }))} s={s} />
+        <Inp label="Company Title" value={settings.companyTitle} onChange={e => setSettings(prev => ({ ...prev, companyTitle: e.target.value }))} s={s} />
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+           <Inp label="System Version" hint="Manual override for footer" value={settings.version || ""} onChange={e => setSettings(prev => ({ ...prev, version: e.target.value }))} s={s} placeholder="v1.0.0" />
+           <Inp label="Logo URL (Manual)" hint="Alternative URL" value={settings.logoUrl} onChange={e => setSettings(prev => ({ ...prev, logoUrl: e.target.value }))} s={s} placeholder="https://..." />
+        </div>
+      </div></Card>
         <Card color={ACCENT.purple} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}>
           <div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>Kanban Columns</div>
           {["backlog","todo","inProgress","inReview","done"].map((k) => {
@@ -811,7 +1107,7 @@ function SettingsPage({ s, accent, settings, setSettings, kanban, crons, agents,
         </div></Card>
 
       <Card color={ACCENT.amber} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>Appearance</div><Inp label="Accent Color" value={settings.accentColor} onChange={e => setSettings({ ...settings, accentColor: e.target.value })} s={s} /><div style={{ display: "flex", gap: 8, marginTop: 8 }}>{["#00E5FF", "#FFB300", "#B388FF", "#00E676", "#FF5252", "#FF80AB"].map(c => (<div key={c} onClick={() => setSettings({ ...settings, accentColor: c })} style={{ width: 36, height: 36, borderRadius: 10, background: c, cursor: "pointer", border: settings.accentColor === c ? `3px solid ${s.text}` : "3px solid transparent", transition: "all 0.2s" }} />))}</div></div></Card>
-      <Card color={ACCENT.green} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>API Connections</div><Inp label="Agent Zero URL" value={settings.agentZeroUrl} onChange={e => setSettings({ ...settings, agentZeroUrl: e.target.value })} s={s} placeholder="http://agent-zero:5000" /><Inp label="n8n URL" value={settings.n8nUrl} onChange={e => setSettings({ ...settings, n8nUrl: e.target.value })} s={s} placeholder="http://n8n:5678" /><Inp label="Postiz URL" value={settings.postizUrl} onChange={e => setSettings({ ...settings, postizUrl: e.target.value })} s={s} placeholder="http://postiz:5000" /><Inp label="Firecrawl URL" value={settings.firecrawlUrl || ""} onChange={e => setSettings({ ...settings, firecrawlUrl: e.target.value })} s={s} placeholder="http://firecrawl:3002" /><Inp label="Gotenberg URL" value={settings.gotenbergUrl || ""} onChange={e => setSettings({ ...settings, gotenbergUrl: e.target.value })} s={s} placeholder="http://gotenberg:3000" /></div></Card>
+      <Card color={ACCENT.green} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>API Connections</div><Inp label="OpenClaw URL" value={settings.agentZeroUrl} onChange={e => setSettings({ ...settings, agentZeroUrl: e.target.value })} s={s} placeholder="http://openclaw:5000" /><Inp label="n8n URL" value={settings.n8nUrl} onChange={e => setSettings({ ...settings, n8nUrl: e.target.value })} s={s} placeholder="http://n8n:5678" /><Inp label="Postiz URL" value={settings.postizUrl} onChange={e => setSettings({ ...settings, postizUrl: e.target.value })} s={s} placeholder="http://postiz:5000" /><Inp label="Firecrawl URL" value={settings.firecrawlUrl || ""} onChange={e => setSettings({ ...settings, firecrawlUrl: e.target.value })} s={s} placeholder="http://firecrawl:3002" /><Inp label="Gotenberg URL" value={settings.gotenbergUrl || ""} onChange={e => setSettings({ ...settings, gotenbergUrl: e.target.value })} s={s} placeholder="http://gotenberg:3000" /></div></Card>
 
       {/* Backup & Restore */}
       <Card color={ACCENT.cyan} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}>
@@ -829,17 +1125,279 @@ function SettingsPage({ s, accent, settings, setSettings, kanban, crons, agents,
       <Card color={ACCENT.purple} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}><span style={{ color: s.text }}>{I.github}</span><div style={{ fontSize: 17, fontWeight: 700, color: s.text }}>Updates</div></div>
         <Inp label="GitHub Repository" hint="Pull UI/UX, code, and feature updates from your repo" value={settings.githubRepo || "bke-logistics/salty-os"} onChange={e => setSettings({ ...settings, githubRepo: e.target.value })} s={s} placeholder="owner/repo" mono />
-        <Inp label="Branch" value={settings.githubBranch || "main"} onChange={e => setSettings({ ...settings, githubBranch: e.target.value })} s={s} placeholder="main" mono />
-        <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 16, lineHeight: 1.5, padding: "12px 16px", background: s.bgInput, borderRadius: 12 }}><strong style={{ color: ACCENT.cyan }}>Safe updates:</strong> Pulling updates only replaces UI/code files. Your data (tasks, agents, crons, deliverables) is stored separately in the database/volume and will not be affected.</div>
-        <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
-          <Btn s={s} accent={accent} variant="ghost" onClick={() => { setUpdateStatus("checking"); setTimeout(() => setUpdateStatus("available"), 2000); }}>{I.refresh} {updateStatus === "checking" ? "Checking..." : "Check for Updates"}</Btn>
-          {updateStatus === "available" && <Btn s={s}>{I.download} Pull Update</Btn>}
+        <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 16, lineHeight: 1.5, padding: "12px 16px", background: s.bgInput, borderRadius: 12 }}>
+          <strong style={{ color: ACCENT.cyan }}>Safe updates:</strong> Pulling updates only replaces UI/code files. A full database backup is created automatically before updating. Your data will never be lost.
         </div>
-        {updateStatus === "available" && (<div style={{ padding: "14px 16px", background: ACCENT.green + "10", border: `1px solid ${ACCENT.green}25`, borderRadius: 14, marginBottom: 12 }}><div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}><span style={{ color: ACCENT.green }}>{I.check}</span><span style={{ color: ACCENT.green, fontSize: 14, fontWeight: 700 }}>Update Available</span></div><div style={{ fontSize: 12, color: s.textMuted, lineHeight: 1.5 }}>v2.1.0 — Enhanced drag-and-drop, real-time Agent Zero WebSocket, improved mobile layout.</div></div>)}
-        <div style={{ fontSize: 12, color: s.textDim, lineHeight: 1.5 }}><strong>Update process:</strong> Auto-backup → git pull → rebuild container → restart. Zero data loss.</div>
+        
+        {updateInfo && (
+          <div style={{ padding: "14px 16px", background: s.bgSidebar, border: `1px solid ${s.border}`, borderRadius: 14, marginBottom: 16 }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8, fontSize: 12 }}>
+              <span style={{ color: s.textMuted }}>Current version (Local)</span>
+              <span style={{ fontFamily: "'JetBrains Mono'", color: s.text }}>{updateInfo.local?.short || "Unknown"}</span>
+            </div>
+            {(updateStatus === "available" || updateStatus === "updated") && updateInfo.remote && (
+              <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12 }}>
+                <span style={{ color: s.textMuted }}>Latest version (GitHub)</span>
+                <span style={{ fontFamily: "'JetBrains Mono'", color: updateStatus === "available" ? ACCENT.amber : ACCENT.green }}>{updateInfo.remote?.short || "Unknown"}</span>
+              </div>
+            )}
+            {updateStatus === "available" && updateInfo.remote?.message && (
+              <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${s.border}`, fontSize: 12, color: s.textDim, lineHeight: 1.5 }}>
+                <strong style={{ color: s.text }}>New in latest update:</strong><br/>{updateInfo.remote.message}
+              </div>
+            )}
+          </div>
+        )}
+
+        <div style={{ display: "flex", gap: 12, marginBottom: 16 }}>
+          <Btn s={s} accent={accent} variant="ghost" onClick={checkUpdate} disabled={updateStatus === "checking" || updateStatus === "updating"}>
+            {I.refresh} {updateStatus === "checking" ? "Checking..." : "Check for Updates"}
+          </Btn>
+          {updateStatus === "available" && (
+            <Btn s={s} accent={ACCENT.green} onClick={applyUpdate}>{I.download} Pull & Update Now</Btn>
+          )}
+        </div>
+        
+        {updateStatus === "updating" && (
+          <div style={{ width: "100%", height: 4, background: s.bgInput, borderRadius: 2, overflow: "hidden", marginBottom: 16 }}>
+            <div style={{ width: "100%", height: "100%", background: ACCENT.cyan, animation: "pulse 1.5s infinite" }} />
+          </div>
+        )}
+        
+        {updateStatus === "updated" && (
+          <div style={{ padding: "10px 16px", background: ACCENT.green + "15", border: `1px solid ${ACCENT.green}30`, borderRadius: 12, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}><span style={{ color: ACCENT.green }}>{I.check}</span><span style={{ color: ACCENT.green, fontSize: 13, fontWeight: 600 }}>System is up to date!</span></div>
+        )}
+
+        {updateStatus === "success" && (
+          <div style={{ padding: "10px 16px", background: accent + "15", border: `1px solid ${accent}30`, borderRadius: 12, marginBottom: 16, display: "flex", alignItems: "center", gap: 8 }}><span style={{ color: accent }}>{I.check}</span><span style={{ color: accent, fontSize: 13, fontWeight: 600 }}>Update applied successfully! Check logs below.</span></div>
+        )}
+
+        {updateStatus === "error" && (
+          <div style={{ padding: "10px 16px", background: ACCENT.red + "15", border: `1px solid ${ACCENT.red}30`, borderRadius: 12, marginBottom: 16 }}><span style={{ color: ACCENT.red, fontSize: 13, fontWeight: 600 }}>Error during update. Check logs.</span></div>
+        )}
+
+        {updateLogs.length > 0 && (
+          <div style={{ background: "#0a0e17", border: `1px solid ${s.border}`, borderRadius: 12, padding: 12, maxHeight: 150, overflowY: "auto", fontFamily: "'JetBrains Mono'", fontSize: 11, color: s.textDim, display: "flex", flexDirection: "column", gap: 4 }}>
+            {updateLogs.map((log, i) => <div key={i}>{log}</div>)}
+          </div>
+        )}
       </div></Card>
     </div>
   </div>);
+}
+
+// ─── OPENCLAW SKILLS ───
+function SkillsPage({ s, accent }) {
+  const [skills, setSkills] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [content, setContent] = useState("");
+  const [editingName, setEditingName] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const loadSkills = async () => {
+    setLoading(true);
+    const data = await api('/skills');
+    if (data) setSkills(data);
+    setLoading(false);
+  };
+
+  useEffect(() => { loadSkills(); }, []);
+
+  const selectSkill = async (filename) => {
+    const data = await api(`/skills/${filename}`);
+    if (data) {
+      setSelected(filename);
+      setEditingName(filename);
+      setContent(data.content);
+      setIsEditing(false);
+    }
+  };
+
+  const createNew = () => {
+    setSelected(null);
+    setEditingName("new-skill.md");
+    setContent("# New OpenClaw Skill\\n\\nInstructions go here.");
+    setIsEditing(true);
+  };
+
+  const saveSkill = async () => {
+    const method = 'POST';
+    const body = { content, newName: editingName };
+    const url = selected ? `/skills/${selected}` : `/skills/${editingName}`;
+    const res = await api(url, { method, body });
+    if (res && res.saved) {
+      await loadSkills();
+      setSelected(res.name);
+      setEditingName(res.name);
+      setIsEditing(false);
+    }
+  };
+
+  const deleteSkill = async (filename) => {
+    if (!confirm(`Delete ${filename}?`)) return;
+    const res = await api(`/skills/${filename}`, { method: 'DELETE' });
+    if (res && res.deleted) {
+      if (selected === filename) { setSelected(null); setContent(""); }
+      await loadSkills();
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", gap: 24, height: "calc(100vh - 120px)" }}>
+      {/* Sidebar List */}
+      <div style={{ width: 300, display: "flex", flexDirection: "column", gap: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ fontSize: 20, fontWeight: 800, color: s.text }}>Skills (.md)</div>
+          <Btn s={s} accent={accent} onClick={createNew}>{I.plus} New</Btn>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", display: "flex", flexDirection: "column", gap: 8 }}>
+          {loading ? <div style={{ color: s.textMuted }}>Loading...</div> : skills.length === 0 ? <div style={{ color: s.textMuted }}>No skills found.</div> : (
+            skills.map(skill => (
+              <div key={skill.name} onClick={() => selectSkill(skill.name)} style={{ padding: "12px 16px", background: selected === skill.name ? accent + "20" : s.bgCard, border: `1px solid ${selected === skill.name ? accent : s.border}`, borderRadius: 12, cursor: "pointer", transition: "all 0.2s" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                  <span style={{ color: s.text, fontWeight: 600, fontSize: 14 }}>{skill.name}</span>
+                  <button onClick={(e) => { e.stopPropagation(); deleteSkill(skill.name); }} style={{ background: "none", border: "none", cursor: "pointer", color: ACCENT.red, opacity: 0.7, padding: 4 }}>{I.trash}</button>
+                </div>
+                <div style={{ fontSize: 11, color: s.textMuted, marginTop: 4, fontFamily: "'JetBrains Mono'" }}>{(skill.size / 1024).toFixed(1)} KB</div>
+              </div>
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* Editor Main */}
+      <Card hoverable={false} style={{ flex: 1, background: s.bgCard, border: `1px solid ${s.border}`, display: "flex", flexDirection: "column" }}>
+        {(selected || isEditing) ? (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: 24 }}>
+            <div style={{ display: "flex", gap: 16, marginBottom: 16, alignItems: "center" }}>
+              <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
+                 <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 4 }}>Filename</div>
+                 <input value={editingName} onChange={e => setEditingName(e.target.value)} disabled={!isEditing} style={{ padding: "10px 14px", background: isEditing ? s.bgInput : s.bgCard, border: `1px solid ${s.border}`, borderRadius: 12, color: s.text, fontFamily: "'JetBrains Mono'", outline: "none" }} />
+              </div>
+              <div style={{ display: "flex", alignItems: "flex-end", height: "100%", paddingBottom: 2 }}>
+                {!isEditing ? (
+                  <Btn s={s} onClick={() => setIsEditing(true)} variant="ghost">{I.edit} Edit Content</Btn>
+                ) : (
+                  <div style={{ display: "flex", gap: 8 }}>
+                    <Btn s={s} variant="ghost" onClick={() => { if (selected) selectSkill(selected); else { setSelected(null); setIsEditing(false); } }}>Cancel</Btn>
+                    <Btn s={s} accent={accent} onClick={saveSkill}>Save Skill</Btn>
+                  </div>
+                )}
+              </div>
+            </div>
+            
+            <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 4 }}>Markdown Content</div>
+            <textarea
+              value={content}
+              onChange={e => setContent(e.target.value)}
+              disabled={!isEditing}
+              style={{ flex: 1, padding: 20, background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 12, color: s.text, fontFamily: "'JetBrains Mono', monospace", fontSize: 13, resize: "none", outline: "none", lineHeight: 1.6 }}
+            />
+          </div>
+        ) : (
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", color: s.textMuted, flexDirection: "column", gap: 16 }}>
+            <div style={{ padding: 20, background: s.bgInput, borderRadius: 20, opacity: 0.5 }}>{I.bolt}</div>
+            Select a skill to view or edit
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+// ─── OPENCLAW CHAT ───
+function ChatPage({ s, accent }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const scrollRef = useRef();
+
+  const send = async () => {
+    if (!input.trim() || loading) return;
+    const userMsg = { role: "user", content: input };
+    setMessages(prev => [...prev, userMsg]);
+    setInput("");
+    setLoading(true);
+
+    try {
+      const res = await a0('chat/send', { message: input });
+      if (res && res.data && res.data.response) {
+        setMessages(prev => [...prev, { role: "ai", content: res.data.response }]);
+      } else {
+         // Mock response for demonstration if the backend isn't ready
+         setTimeout(() => {
+            setMessages(prev => [...prev, { role: "ai", content: "I am currenty initializing my cognitive bridge. Once the OpenClaw backend is fully linked via the API, I will be able to process your requests here!" }]);
+            setLoading(false);
+         }, 1000);
+         return;
+      }
+    } catch (err) {
+      setMessages(prev => [...prev, { role: "system", content: "Connection Error: Ensure OpenClaw is running and the API bridge is active." }]);
+    }
+    setLoading(false);
+  };
+
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [messages]);
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", height: "calc(100vh - 120px)", background: s.bgCard, borderRadius: 24, border: `1px solid ${s.border}`, overflow: "hidden", boxShadow: s.shadow }}>
+        <div style={{ padding: "20px 28px", borderBottom: `1px solid ${s.border}`, display: "flex", alignItems: "center", justifyContent: "space-between", background: s.bgSidebar }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+               <div style={{ width: 40, height: 40, borderRadius: 12, background: `linear-gradient(135deg, ${accent}, ${accent}CC)`, display: "flex", alignItems: "center", justifyContent: "center", color: "#000", fontSize: 20 }}>{I.bolt}</div>
+               <div>
+                  <div style={{ fontSize: 18, fontWeight: 800, color: s.text, fontFamily: "'Space Grotesk'" }}>Klaus <span style={{ fontSize: 12, color: ACCENT.green, marginLeft: 8, fontWeight: 600 }}>● Online</span></div>
+                  <div style={{ fontSize: 11, color: s.textMuted, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Operations Co-Pilot</div>
+               </div>
+            </div>
+            <Btn s={s} variant="ghost" onClick={() => setMessages([])}>Clear Chat</Btn>
+        </div>
+
+        <div ref={scrollRef} style={{ flex: 1, overflowY: "auto", padding: "32px 40px", display: "flex", flexDirection: "column", gap: 24 }}>
+            {messages.length === 0 && (
+              <div style={{ textAlign: "center", marginTop: 80, maxWidth: 400, marginInline: "auto" }}>
+                  <div style={{ fontSize: 48, marginBottom: 24 }}>🤖</div>
+                  <div style={{ fontSize: 24, fontWeight: 800, color: s.text, fontFamily: "'Space Grotesk'", marginBottom: 12 }}>Initialize Command</div>
+                  <div style={{ fontSize: 14, color: s.textMuted, lineHeight: 1.6 }}>Welcome to the OpenClaw Command Center. You can issue direct orders to Klaus, manage agents, and automate freight workflows right from this console.</div>
+              </div>
+            )}
+            {messages.map((m, i) => (
+                <div key={i} style={{ alignSelf: m.role === 'user' ? 'flex-end' : 'flex-start', maxWidth: '75%', display: "flex", flexDirection: "column", gap: 6, alignItems: m.role === 'user' ? 'flex-end' : 'flex-start' }}>
+                    <div style={{ fontSize: 10, fontWeight: 800, color: s.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginLeft: m.role === 'user' ? 0 : 12, marginRight: m.role === 'user' ? 12 : 0 }}>{m.role === 'user' ? 'You' : 'Klaus'}</div>
+                    <div style={{ 
+                        padding: "16px 24px", 
+                        borderRadius: m.role === 'user' ? "24px 4px 24px 24px" : "4px 24px 24px 24px", 
+                        background: m.role === 'user' ? accent : s.bgInput, 
+                        color: m.role === 'user' ? '#000' : s.text, 
+                        fontSize: 15, 
+                        lineHeight: 1.5,
+                        fontWeight: 500,
+                        boxShadow: m.role === 'user' ? `0 4px 20px ${accent}40` : "none",
+                        border: m.role === 'ai' ? `1px solid ${s.border}` : "none"
+                    }}>
+                        {m.content}
+                    </div>
+                </div>
+            ))}
+            {loading && <div style={{ alignSelf: 'flex-start', padding: "12px 20px", background: s.bgInput, borderRadius: 12, color: s.textMuted, fontSize: 13 }}>Klaus is analyzing...</div>}
+        </div>
+
+        <div style={{ padding: "24px 28px", background: s.bgSidebar, borderTop: `1px solid ${s.border}`, display: "flex", gap: 16 }}>
+            <input 
+                value={input} 
+                onChange={e => setInput(e.target.value)} 
+                onKeyDown={e => e.key === 'Enter' && send()}
+                placeholder="Type a command or ask Klaus anything..." 
+                style={{ flex: 1, padding: "16px 24px", background: s.bgCard, border: `1px solid ${s.border}`, borderRadius: 16, color: s.text, fontSize: 15, outline: "none", boxShadow: "inset 0 2px 4px rgba(0,0,0,0.05)" }} 
+            />
+            <button onClick={send} disabled={!input.trim() || loading} style={{ width: 56, height: 56, background: accent, border: "none", borderRadius: 16, color: "#000", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.3s", opacity: (!input.trim() || loading) ? 0.5 : 1 }}>
+               <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+            </button>
+        </div>
+    </div>
+  );
 }
 
 // ═════════════════════════════════════════
@@ -848,7 +1406,7 @@ function SettingsPage({ s, accent, settings, setSettings, kanban, crons, agents,
 export default function SaltyOS() {
   const [dark, setDark] = useState(true); const [page, setPage] = useState(() => { try { return localStorage.getItem("salty.page") || "dashboard"; } catch { return "dashboard"; } }); const [sidebarOpen, setSidebarOpen] = useState(true); const [time, setTime] = useState(new Date());
   const [kanban, setKanban] = useState({ backlog: [], todo: [], inProgress: [], inReview: [], done: [] }); const [agents, setAgents] = useState([]); const [crons, setCrons] = useState([]);
-  const [settings, setSettings] = useState({ companyName: "BKE Logistics", companyTitle: "Freight Brokerage Operations Hub", logoUrl: "", accentColor: ACCENT.cyan, kanbanColumns: ["Backlog", "To-Do", "In Progress", "In Review", "Done"], agentZeroUrl: "http://agent-zero:5000", n8nUrl: "http://n8n:5678", postizUrl: "http://postiz:5000", firecrawlUrl: "http://firecrawl:3002", gotenbergUrl: "http://gotenberg:3000", githubRepo: "bke-logistics/salty-os", githubBranch: "main" });
+  const [settings, setSettings] = useState({ companyName: "BKE Logistics", companyTitle: "Freight Brokerage Operations Hub", logoUrl: "", accentColor: ACCENT.cyan, kanbanColumns: ["Backlog", "To-Do", "In Progress", "In Review", "Done"], agentZeroUrl: "http://openclaw:5000", n8nUrl: "http://n8n:5678", postizUrl: "http://postiz:5000", firecrawlUrl: "http://firecrawl:3002", gotenbergUrl: "http://gotenberg:3000", githubRepo: "bke-logistics/salty-os", githubBranch: "main" });
   const [services, setServices] = useState({}); const [a0Agents, setA0Agents] = useState([]); const [a0Status, setA0Status] = useState(null); const [loaded, setLoaded] = useState(false);
   const [versionInfo, setVersionInfo] = useState(null);
 
@@ -866,10 +1424,9 @@ export default function SaltyOS() {
         if (dbAgents) setAgents(dbAgents);
         if (dbCrons) setCrons(dbCrons);
       if (dbKanban) { const b = dbKanban.board || dbKanban; setKanban({ backlog: b.backlog || [], todo: b.todo || [], inProgress: b.inProgress || [], inReview: b.inReview || [], done: b.done || [] }); }
-      if (dbSettings?.companyName) setSettings(dbSettings);
-      if (svc) setServices(svc);
-      if (a0Ag?.ok) setA0Agents(a0Ag.data);
-      if (a0Health) setA0Status(a0Health);
+      if (dbSettings && Object.keys(dbSettings).length > 0) {
+        setSettings(prev => ({ ...prev, ...dbSettings }));
+      }
       if (vInfo) setVersionInfo(vInfo);
 
       setLoaded(true);
@@ -883,19 +1440,23 @@ export default function SaltyOS() {
     }, 30000);
     return () => { clearInterval(t); clearInterval(svcTimer); };
   }, []);
-  const nav = [{ key: "dashboard", label: "Dashboard", icon: I.dashboard }, { key: "kanban", label: "Kanban", icon: I.kanban }, { key: "agents", label: "Agents", icon: I.agents }, { key: "scheduler", label: "Scheduler", icon: I.scheduler }, { key: "deliverables", label: "Deliverables", icon: I.deliverables }, { key: "logs", label: "Activity Logs", icon: I.logs }, { key: "org", label: "Org Chart", icon: I.org }, { key: "settings", label: "Settings", icon: I.settings }];
-  const renderPage = () => { switch (page) { case "dashboard": return <DashboardPage s={s} accent={accent} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; case "kanban": return <KanbanPage s={s} accent={accent} settings={settings} kanban={kanban} setKanban={setKanban} agents={agents} />; case "agents": return <AgentsPage s={s} accent={accent} agents={agents} setAgents={setAgents} a0Agents={a0Agents} />; case "scheduler": return <SchedulerPage s={s} accent={accent} />; case "deliverables": return <DeliverablesPage s={s} accent={accent} />; case "logs": return <LogsPage s={s} accent={accent} />; case "org": return <OrgChartPage s={s} />; case "settings": return <SettingsPage s={s} accent={accent} settings={settings} setSettings={setSettings} kanban={kanban} crons={crons} agents={agents} setKanban={setKanban} setCrons={setCrons} setAgents={setAgents} services={services} />; default: return <DashboardPage s={s} accent={accent} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; } };
+  const nav = [{ key: "dashboard", label: "Dashboard", icon: I.dashboard }, { key: "chat", label: "OpenClaw Chat", icon: I.chat }, { key: "kanban", label: "Kanban", icon: I.kanban }, { key: "agents", label: "Agents", icon: I.agents }, { key: "scheduler", label: "Scheduler", icon: I.scheduler }, { key: "deliverables", label: "Deliverables", icon: I.deliverables }, { key: "skills", label: "OpenClaw Skills", icon: I.bolt }, { key: "logs", label: "Activity Logs", icon: I.logs }, { key: "org", label: "Org Chart", icon: I.org }, { key: "settings", label: "Settings", icon: I.settings }];
+  const renderPage = () => { switch (page) { case "dashboard": return <DashboardPage s={s} accent={accent} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; case "chat": return <ChatPage s={s} accent={accent} settings={settings} />; case "kanban": return <KanbanPage s={s} accent={accent} settings={settings} kanban={kanban} setKanban={setKanban} agents={agents} />; case "agents": return <AgentsPage s={s} accent={accent} agents={agents} setAgents={setAgents} a0Agents={a0Agents} />; case "scheduler": return <SchedulerPage s={s} accent={accent} />; case "deliverables": return <DeliverablesPage s={s} accent={accent} />; case "skills": return <SkillsPage s={s} accent={accent} />; case "logs": return <LogsPage s={s} accent={accent} />; case "org": return <OrgChartPage s={s} />; case "settings": return <SettingsPage s={s} accent={accent} settings={settings} setSettings={setSettings} kanban={kanban} crons={crons} agents={agents} setKanban={setKanban} setCrons={setCrons} setAgents={setAgents} services={services} loaded={loaded} />; default: return <DashboardPage s={s} accent={accent} kanban={kanban} crons={crons} agents={agents} services={services} a0Status={a0Status} setPage={setPage} />; } };
 
   return (<div style={{ display: "flex", height: "100vh", fontFamily: "'DM Sans', sans-serif", background: s.bg, color: s.text, overflow: "hidden", transition: "all 0.4s ease" }}>
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <style>{`@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes slideUp{from{opacity:0;transform:translateY(20px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}@keyframes pulse{0%,100%{opacity:.3;transform:scale(1)}50%{opacity:0;transform:scale(2)}}*{box-sizing:border-box}::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:${s.border};border-radius:3px}::selection{background:${accent}30}`}</style>
     <aside style={{ width: sidebarOpen ? 240 : 72, background: s.bgSidebar, borderRight: `1px solid ${s.border}`, display: "flex", flexDirection: "column", transition: "width 0.4s cubic-bezier(0.16, 1, 0.3, 1)", overflow: "hidden", flexShrink: 0, zIndex: 10 }}>
-      <div style={{ padding: sidebarOpen ? "24px 20px" : "24px 16px", borderBottom: `1px solid ${s.border}`, display: "flex", alignItems: "center", gap: 12, minHeight: 80 }}>
-        <div style={{ width: 40, height: 40, borderRadius: 14, background: `linear-gradient(135deg, ${ACCENT.cyan}, ${ACCENT.cyanDark})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 18, fontWeight: 900, color: "#0a0e17", fontFamily: "'Space Grotesk'", flexShrink: 0, boxShadow: `0 4px 16px ${ACCENT.cyanGlow}` }}>S</div>
-        {sidebarOpen && <div><div style={{ fontSize: 17, fontWeight: 800, color: s.text, fontFamily: "'Space Grotesk'", letterSpacing: -0.5 }}>Salty OS</div><div style={{ fontSize: 10, color: s.textMuted, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>Source of Truth</div></div>}
+      <div style={{ padding: sidebarOpen ? "24px 20px" : "12px", borderBottom: `1px solid ${s.border}`, display: "flex", alignItems: "center", gap: 12, minHeight: 90 }}>
+        {settings.logoUrl ? (
+          <img src={settings.logoUrl.startsWith('http') ? settings.logoUrl : `${API.replace('/api','')}${settings.logoUrl}`} style={{ width: 56, height: 56, borderRadius: 14, objectFit: "contain", flexShrink: 0, padding: 2 }} alt="Logo" />
+        ) : (
+          <div style={{ width: 56, height: 56, borderRadius: 16, background: `linear-gradient(135deg, ${ACCENT.cyan}, ${ACCENT.cyanDark})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 900, color: "#0a0e17", fontFamily: "'Space Grotesk'", flexShrink: 0, boxShadow: `0 4px 16px ${ACCENT.cyanGlow}` }}>S</div>
+        )}
+        {sidebarOpen && <div><div style={{ fontSize: 17, fontWeight: 800, color: s.text, fontFamily: "'Space Grotesk'", letterSpacing: -0.5 }}>{settings.companyName || "Salty OS"}</div><div style={{ fontSize: 10, color: s.textMuted, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>{settings.companyTitle || "Source of Truth"}</div></div>}
       </div>
       <nav style={{ flex: 1, padding: "12px 8px", display: "flex", flexDirection: "column", gap: 2 }}>{nav.map(item => { const active = page === item.key; return (<button key={item.key} onClick={() => setPage(item.key)} style={{ display: "flex", alignItems: "center", gap: 14, padding: sidebarOpen ? "11px 16px" : "11px 0", borderRadius: 14, border: "none", cursor: "pointer", width: "100%", background: active ? accent + "12" : "transparent", color: active ? accent : s.textMuted, fontSize: 14, fontWeight: active ? 700 : 500, fontFamily: "'DM Sans'", transition: "all 0.25s", justifyContent: sidebarOpen ? "flex-start" : "center", position: "relative" }}>{active && <div style={{ position: "absolute", left: 0, top: "20%", bottom: "20%", width: 3, borderRadius: 2, background: accent }} />}{item.icon}{sidebarOpen && <span>{item.label}</span>}</button>); })}</nav>
-      <div style={{ padding: sidebarOpen ? "16px 20px" : "16px", borderTop: `1px solid ${s.border}` }}><div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: sidebarOpen ? "flex-start" : "center" }}><div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: sidebarOpen ? "flex-start" : "center" }}><StatusDot status="active" />{sidebarOpen && <span style={{ fontSize: 12, fontWeight: 600, color: ACCENT.green }}>Agent Zero Online</span>}</div>{sidebarOpen && <div style={{ fontSize: 11, fontWeight: 600, color: s.textMuted }}>Salty OS {versionInfo?.version ? `v${versionInfo.version}` : ""}</div>}</div></div>
+      <div style={{ padding: sidebarOpen ? "16px 20px" : "16px", borderTop: `1px solid ${s.border}` }}><div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: sidebarOpen ? "flex-start" : "center" }}><div style={{ display: "flex", alignItems: "center", gap: 10, justifyContent: sidebarOpen ? "flex-start" : "center" }}><StatusDot status="active" />{sidebarOpen && <span style={{ fontSize: 12, fontWeight: 600, color: ACCENT.green }}>OpenClaw Online</span>}</div>        {sidebarOpen && <div style={{ fontSize: 11, fontWeight: 600, color: s.textMuted }}>Salty OS {settings.version ? settings.version : `v${versionInfo?.version || "1.0.0"}`}</div>}</div></div>
     </aside>
     <main style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}>
       <header style={{ padding: "16px 28px", borderBottom: `1px solid ${s.border}`, display: "flex", alignItems: "center", gap: 16, background: s.bgSidebar, flexShrink: 0 }}>

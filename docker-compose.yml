@@ -1,10 +1,30 @@
 # ═══════════════════════════════════════════
-# Salty OS — Frontend + Backend
+# Salty OS — Full Stack Production Deployment
+# Includes: Frontend, Backend, and PostgreSQL DB
 # Deploy: docker compose up -d --build
 # ═══════════════════════════════════════════
 
 services:
-  # React Frontend
+  # Database
+  db:
+    image: postgres:15-alpine
+    container_name: salty-db
+    restart: unless-stopped
+    environment:
+      - POSTGRES_DB=${DB_NAME:-saltyos}
+      - POSTGRES_USER=${DB_USER:-salty}
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-saltyos_secret}
+    volumes:
+      - salty-db-data:/var/lib/postgresql/data
+    networks:
+      - agent-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-salty} -d ${DB_NAME:-saltyos}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # React Frontend (Nginx)
   salty-os:
     build:
       context: .
@@ -18,8 +38,6 @@ services:
         condition: service_healthy
     networks:
       - agent-network
-    labels:
-      - "com.salty-os.service=frontend"
 
   # Express API Backend
   salty-api:
@@ -32,13 +50,13 @@ services:
       - "${API_PORT:-3001}:3001"
     environment:
       - API_PORT=3001
-      - DB_HOST=${DB_HOST:-postgres}
-      - DB_PORT=${DB_PORT:-5432}
+      - DB_HOST=db
+      - DB_PORT=5432
       - DB_NAME=${DB_NAME:-saltyos}
       - DB_USER=${DB_USER:-salty}
       - DB_PASSWORD=${DB_PASSWORD:-saltyos_secret}
       - SALTY_AUTH_TOKEN=${SALTY_AUTH_TOKEN:-}
-      - AGENT_ZERO_URL=http://agent-zero:80
+      - AGENT_ZERO_URL=http://openclaw:5000
       - N8N_URL=http://n8n:5678
       - POSTIZ_URL=http://postiz:5000
       - GOTENBERG_URL=http://gotenberg:3000
@@ -48,20 +66,23 @@ services:
     volumes:
       - salty-data:/app/data
       - salty-backups:/app/backups
-      - ./a0-shared/agents:/a0-agents
-      - ./a0-shared/scheduler:/a0-scheduler
+      - ./public/uploads:/app/public/uploads
+      - ./openclaw-skills:/app/openclaw-skills
+    depends_on:
+      db:
+        condition: service_healthy
     networks:
       - agent-network
-    labels:
-      - "com.salty-os.service=api"
 
 volumes:
   salty-data:
     name: salty-os-data
   salty-backups:
     name: salty-os-backups
+  salty-db-data:
+    name: salty-os-db-data
 
 networks:
   agent-network:
-    external: true
     name: agent-network
+    driver: bridge
