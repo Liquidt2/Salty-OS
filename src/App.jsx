@@ -983,6 +983,19 @@ function SettingsPage({ s, accent, settings, setSettings, kanban, crons, agents,
   const [backupStatus, setBackupStatus] = useState(null); const [updateStatus, setUpdateStatus] = useState(null); const [saveStatus, setSaveStatus] = useState(null);
   const [backups, setBackups] = useState([{ id: "b1", date: "2026-02-26 08:00", size: "24 KB", label: "Auto-backup" }, { id: "b2", date: "2026-02-25 16:00", size: "22 KB", label: "Pre-update backup" }, { id: "b3", date: "2026-02-24 08:00", size: "19 KB", label: "Auto-backup" }]);
   const [updateInfo, setUpdateInfo] = useState(null); const [updateLogs, setUpdateLogs] = useState([]);
+  // API Key state
+  const [apiKeyStatus, setApiKeyStatus] = useState(null); // { exists, createdAt }
+  const [newApiKey, setNewApiKey] = useState(null);
+  const [apiKeyLoading, setApiKeyLoading] = useState(false);
+  // Webhooks state
+  const [webhooks, setWebhooks] = useState([]);
+  const [newWebhookUrl, setNewWebhookUrl] = useState("");
+
+  useEffect(() => {
+    // Load API key status and webhooks on mount
+    api('/settings/api-key/status').then(d => { if (d) setApiKeyStatus(d); });
+    api('/settings/webhooks').then(d => { if (Array.isArray(d)) setWebhooks(d); });
+  }, []);
 
   const saveSettings = async () => {
     setSaveStatus("saving");
@@ -1108,6 +1121,84 @@ function SettingsPage({ s, accent, settings, setSettings, kanban, crons, agents,
 
       <Card color={ACCENT.amber} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>Appearance</div><Inp label="Accent Color" value={settings.accentColor} onChange={e => setSettings({ ...settings, accentColor: e.target.value })} s={s} /><div style={{ display: "flex", gap: 8, marginTop: 8 }}>{["#00E5FF", "#FFB300", "#B388FF", "#00E676", "#FF5252", "#FF80AB"].map(c => (<div key={c} onClick={() => setSettings({ ...settings, accentColor: c })} style={{ width: 36, height: 36, borderRadius: 10, background: c, cursor: "pointer", border: settings.accentColor === c ? `3px solid ${s.text}` : "3px solid transparent", transition: "all 0.2s" }} />))}</div></div></Card>
       <Card color={ACCENT.green} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>API Connections</div><Inp label="OpenClaw URL" value={settings.agentZeroUrl} onChange={e => setSettings({ ...settings, agentZeroUrl: e.target.value })} s={s} placeholder="http://openclaw:5000" /><Inp label="n8n URL" value={settings.n8nUrl} onChange={e => setSettings({ ...settings, n8nUrl: e.target.value })} s={s} placeholder="http://n8n:5678" /><Inp label="Postiz URL" value={settings.postizUrl} onChange={e => setSettings({ ...settings, postizUrl: e.target.value })} s={s} placeholder="http://postiz:5000" /><Inp label="Firecrawl URL" value={settings.firecrawlUrl || ""} onChange={e => setSettings({ ...settings, firecrawlUrl: e.target.value })} s={s} placeholder="http://firecrawl:3002" /><Inp label="Gotenberg URL" value={settings.gotenbergUrl || ""} onChange={e => setSettings({ ...settings, gotenbergUrl: e.target.value })} s={s} placeholder="http://gotenberg:3000" /></div></Card>
+
+      {/* API Key */}
+      <Card color={ACCENT.red} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}><span style={{ color: ACCENT.red, fontSize: 20 }}>🔑</span><div style={{ fontSize: 17, fontWeight: 700, color: s.text }}>API Key</div></div>
+        <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 16, lineHeight: 1.5 }}>
+          Generate an API key so external services (like OpenClaw) can authenticate with Salty-OS. The key is shown only once — save it securely.
+        </div>
+        {newApiKey && (
+          <div style={{ padding: "12px 16px", background: ACCENT.green + "10", border: `1px solid ${ACCENT.green}30`, borderRadius: 12, marginBottom: 16 }}>
+            <div style={{ fontSize: 11, color: ACCENT.green, fontWeight: 700, marginBottom: 6 }}>NEW API KEY (copy now — shown only once)</div>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <code style={{ flex: 1, fontFamily: "'JetBrains Mono'", fontSize: 12, color: s.text, background: s.bgInput, padding: "8px 12px", borderRadius: 8, wordBreak: "break-all", border: `1px solid ${s.border}` }}>{newApiKey}</code>
+              <button onClick={() => { navigator.clipboard.writeText(newApiKey); }} style={{ padding: "8px 14px", borderRadius: 10, border: "none", background: accent, color: "#000", fontSize: 12, fontWeight: 700, cursor: "pointer" }}>Copy</button>
+            </div>
+          </div>
+        )}
+        {apiKeyStatus?.exists && (
+          <div style={{ padding: "10px 16px", background: s.bgInput, borderRadius: 12, marginBottom: 16, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: s.text }}>Key Active</div>
+              <div style={{ fontSize: 11, color: s.textMuted }}>Created: {apiKeyStatus.createdAt ? new Date(apiKeyStatus.createdAt).toLocaleDateString() : "Unknown"}</div>
+            </div>
+            <span style={{ color: ACCENT.green, fontSize: 18 }}>●</span>
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 12 }}>
+          <Btn s={s} accent={accent} disabled={apiKeyLoading} onClick={async () => {
+            setApiKeyLoading(true);
+            const res = await api('/settings/api-key', { method: 'POST' });
+            if (res?.key) { setNewApiKey(res.key); setApiKeyStatus({ exists: true, createdAt: new Date().toISOString() }); }
+            setApiKeyLoading(false);
+          }}>{apiKeyStatus?.exists ? "🔄 Rotate Key" : "🔑 Generate Key"}</Btn>
+          {apiKeyStatus?.exists && <Btn s={s} accent={ACCENT.red} variant="ghost" disabled={apiKeyLoading} onClick={async () => {
+            setApiKeyLoading(true);
+            await api('/settings/api-key', { method: 'DELETE' });
+            setApiKeyStatus({ exists: false }); setNewApiKey(null);
+            setApiKeyLoading(false);
+          }}>Revoke</Btn>}
+        </div>
+      </div></Card>
+
+      {/* Webhooks */}
+      <Card color={ACCENT.purple} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 20 }}><span style={{ color: ACCENT.purple, fontSize: 20 }}>🔔</span><div style={{ fontSize: 17, fontWeight: 700, color: s.text }}>Webhooks</div></div>
+        <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 16, lineHeight: 1.5 }}>
+          Register webhook URLs to receive real-time notifications when data changes in Salty-OS (tasks, agents, skills, etc). Payloads are HMAC-SHA256 signed.
+        </div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
+          <input value={newWebhookUrl} onChange={e => setNewWebhookUrl(e.target.value)} placeholder="https://your-service.com/webhook" style={{ flex: 1, padding: "10px 14px", background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 12, color: s.text, fontSize: 13, outline: "none", fontFamily: "'DM Sans'" }} />
+          <Btn s={s} accent={accent} disabled={!newWebhookUrl.trim()} onClick={async () => {
+            const res = await api('/settings/webhooks', { method: 'POST', body: { url: newWebhookUrl.trim() } });
+            if (res?.id) { setWebhooks(prev => [...prev, res]); setNewWebhookUrl(""); }
+          }}>Add</Btn>
+        </div>
+        {webhooks.length === 0 && <div style={{ fontSize: 13, color: s.textDim, textAlign: "center", padding: "16px 0" }}>No webhooks registered</div>}
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {webhooks.map(wh => (
+            <div key={wh.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 14px", background: s.bgInput, borderRadius: 12 }}>
+              <span style={{ color: wh.paused ? ACCENT.amber : ACCENT.green, fontSize: 10 }}>●</span>
+              <span style={{ flex: 1, fontSize: 12, color: s.text, fontFamily: "'JetBrains Mono'", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{wh.url}</span>
+              <button onClick={async () => {
+                const res = await api(`/settings/webhooks/${wh.id}`, { method: 'PUT', body: { paused: !wh.paused } });
+                if (res) setWebhooks(prev => prev.map(h => h.id === wh.id ? { ...h, paused: !h.paused } : h));
+              }} style={{ padding: "4px 10px", borderRadius: 8, border: `1px solid ${s.border}`, background: "transparent", color: s.textMuted, fontSize: 11, cursor: "pointer" }}>{wh.paused ? "Resume" : "Pause"}</button>
+              <button onClick={async () => {
+                await api(`/settings/webhooks/${wh.id}/test`, { method: 'POST' });
+              }} style={{ padding: "4px 10px", borderRadius: 8, border: `1px solid ${s.border}`, background: "transparent", color: ACCENT.cyan, fontSize: 11, cursor: "pointer" }}>Test</button>
+              <button onClick={async () => {
+                await api(`/settings/webhooks/${wh.id}`, { method: 'DELETE' });
+                setWebhooks(prev => prev.filter(h => h.id !== wh.id));
+              }} style={{ padding: "4px 10px", borderRadius: 8, border: `1px solid ${ACCENT.red}30`, background: "transparent", color: ACCENT.red, fontSize: 11, cursor: "pointer" }}>Remove</button>
+            </div>
+          ))}
+        </div>
+        {webhooks.length > 0 && <div style={{ fontSize: 11, color: s.textDim, marginTop: 12, lineHeight: 1.5 }}>
+          Events: kanban.created/updated/deleted, cron.created/updated/deleted, agent.updated/deleted, skill.created/updated/renamed/deleted
+        </div>}
+      </div></Card>
 
       {/* Backup & Restore */}
       <Card color={ACCENT.cyan} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}>

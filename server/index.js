@@ -71,15 +71,80 @@ const UPLOADS_DIR = join(REPO_ROOT, 'public', 'uploads');
 if (!existsSync(UPLOADS_DIR)) mkdirSync(UPLOADS_DIR, { recursive: true });
 app.use('/uploads', express.static(UPLOADS_DIR));
 
-// Auth middleware — simple token gate
+// ─── Deliverables directory ───
+const DELIVERABLES_DIR = process.env.DELIVERABLES_PATH || join(REPO_ROOT, 'data', 'deliverables');
+if (!existsSync(DELIVERABLES_DIR)) mkdirSync(DELIVERABLES_DIR, { recursive: true });
+app.use('/files', express.static(DELIVERABLES_DIR));
+
+// ─── API Key helpers ───
+function generateApiKey() {
+  return 'salty_' + crypto.randomBytes(32).toString('hex');
+}
+function hashApiKey(key) {
+  return crypto.createHash('sha256').update(key).digest('hex');
+}
+async function getStoredApiKeyHash() {
+  try {
+    const { rows } = await pool.query("SELECT value FROM settings WHERE key = 'apiKeyHash'");
+    if (rows[0]?.value) {
+      const v = rows[0].value;
+      return typeof v === 'string' ? v : v.hash ? v.hash : null;
+    }
+  } catch {}
+  return null;
+}
+
+// ─── Auth middleware — supports env token, API key header, and Bearer token ───
 const AUTH_TOKEN = process.env.SALTY_AUTH_TOKEN || '';
-const authMiddleware = (req, res, next) => {
-  if (!AUTH_TOKEN) return next(); // No token set = open (dev mode)
-  const token = req.headers['x-auth-token'] || req.query.token;
-  if (token === AUTH_TOKEN) return next();
+const authMiddleware = async (req, res, next) => {
+  // 1. Env-based token (original)
+  if (AUTH_TOKEN) {
+    const token = req.headers['x-auth-token'] || req.query.token;
+    if (token === AUTH_TOKEN) return next();
+  }
+  // 2. API Key (x-api-key header or Authorization: Bearer <key>)
+  const apiKey = req.headers['x-api-key'] || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null);
+  if (apiKey) {
+    const storedHash = await getStoredApiKeyHash();
+    if (storedHash && hashApiKey(apiKey) === storedHash) return next();
+    return res.status(401).json({ error: 'Invalid API key' });
+  }
+  // 3. No auth configured = dev mode (open access)
+  if (!AUTH_TOKEN) return next();
   res.status(401).json({ error: 'Unauthorized' });
 };
 app.use('/api', authMiddleware);
+
+// ─── Webhook helpers ───
+async function getWebhooks() {
+  try {
+    const { rows } = await pool.query("SELECT value FROM settings WHERE key = 'webhooks'");
+    if (rows[0]?.value) {
+      const v = rows[0].value;
+      return Array.isArray(v) ? v : [];
+    }
+  } catch {}
+  return [];
+}
+
+async function emitWebhook(event, payload) {
+  const webhooks = await getWebhooks();
+  const body = JSON.stringify({ event, timestamp: new Date().toISOString(), source: 'salty-os', payload });
+  for (const wh of webhooks) {
+    if (wh.paused) continue;
+    if (wh.events && wh.events.length > 0 && !wh.events.includes(event) && !wh.events.includes('*')) continue;
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (wh.secret) {
+        const sig = crypto.createHmac('sha256', wh.secret).update(body).digest('hex');
+        headers['x-salty-signature'] = `sha256=${sig}`;
+      }
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 5000);
+      fetch(wh.url, { method: 'POST', headers, body, signal: controller.signal }).catch(() => {});
+    } catch {}
+  }
+}
 
 // ─── PostgreSQL Connection ───
 // Try env host, then 'postgres' (docker), then 'localhost' (local dev)
@@ -290,6 +355,7 @@ app.post('/api/kanban', async (req, res) => {
       [taskId, title, description || '', status || 'todo', priority || 'medium', agent || '', tags || [], due_date || '']
     );
     await logActivity('system', 'kanban_update', `Task "${title}" ${id ? 'updated' : 'created'}`, 'kanban');
+    emitWebhook(id ? 'kanban.updated' : 'kanban.created', rows[0]);
     res.json(rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -314,6 +380,7 @@ app.put('/api/kanban/:id', async (req, res) => {
     const { rows } = await pool.query(
       `UPDATE kanban_tasks SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`, vals
     );
+    emitWebhook('kanban.updated', rows[0]);
     res.json(rows[0] || { error: 'Not found' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -323,6 +390,7 @@ app.put('/api/kanban/:id', async (req, res) => {
 app.delete('/api/kanban/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM kanban_tasks WHERE id = $1', [req.params.id]);
+    emitWebhook('kanban.deleted', { id: req.params.id });
     res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -389,6 +457,7 @@ app.post('/api/crons', async (req, res) => {
        agent||'', description||'', enabled !== false]
     );
     await logActivity('system', 'cron_update', `Task "${name}" ${id ? 'updated' : 'created'}`, 'scheduler');
+    emitWebhook(id ? 'cron.updated' : 'cron.created', rows[0]);
     res.json(rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -416,6 +485,7 @@ app.put('/api/crons/:id', async (req, res) => {
 app.delete('/api/crons/:id', async (req, res) => {
   try {
     await pool.query('DELETE FROM cron_tasks WHERE id = $1', [req.params.id]);
+    emitWebhook('cron.deleted', { id: req.params.id });
     res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -468,7 +538,18 @@ app.put('/api/agents/:id', async (req, res) => {
     }
     vals.push(id);
     const { rows } = await pool.query(`UPDATE agents SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`, vals);
+    emitWebhook('agent.updated', rows[0]);
     res.json(rows[0] || { error: 'Not found' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/agents/:id', async (req, res) => {
+  try {
+    await pool.query('DELETE FROM agents WHERE id = $1', [req.params.id]);
+    emitWebhook('agent.deleted', { id: req.params.id });
+    res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -639,6 +720,105 @@ app.post('/api/settings', async (req, res) => {
     res.json({ saved: Object.keys(entries).length });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── API KEY MANAGEMENT ───
+app.post('/api/settings/api-key', async (req, res) => {
+  try {
+    const plainKey = generateApiKey();
+    const hash = hashApiKey(plainKey);
+    await saveSaltySettings({ apiKeyHash: { hash, createdAt: new Date().toISOString() } });
+    res.json({ key: plainKey, message: 'Save this key — it will only be shown once.' });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/settings/api-key', async (req, res) => {
+  try {
+    await saveSaltySettings({ apiKeyHash: null });
+    res.json({ revoked: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/settings/api-key/status', async (req, res) => {
+  try {
+    const settings = await getSaltySettings();
+    const info = settings.apiKeyHash;
+    res.json({ exists: !!(info && info.hash), createdAt: info?.createdAt || null });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── WEBHOOK MANAGEMENT ───
+app.get('/api/settings/webhooks', async (req, res) => {
+  try {
+    const hooks = await getWebhooks();
+    res.json(hooks);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings/webhooks', async (req, res) => {
+  try {
+    const { url, events, secret } = req.body;
+    if (!url) return res.status(400).json({ error: 'URL required' });
+    const hooks = await getWebhooks();
+    const id = 'wh_' + crypto.randomBytes(8).toString('hex');
+    const newHook = { id, url, events: events || ['*'], secret: secret || crypto.randomBytes(16).toString('hex'), paused: false, createdAt: new Date().toISOString() };
+    hooks.push(newHook);
+    await saveSaltySettings({ webhooks: hooks });
+    res.json(newHook);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/settings/webhooks/:id', async (req, res) => {
+  try {
+    const hooks = await getWebhooks();
+    const idx = hooks.findIndex(h => h.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'Webhook not found' });
+    hooks[idx] = { ...hooks[idx], ...req.body };
+    await saveSaltySettings({ webhooks: hooks });
+    res.json(hooks[idx]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/settings/webhooks/:id', async (req, res) => {
+  try {
+    let hooks = await getWebhooks();
+    hooks = hooks.filter(h => h.id !== req.params.id);
+    await saveSaltySettings({ webhooks: hooks });
+    res.json({ deleted: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings/webhooks/:id/test', async (req, res) => {
+  try {
+    const hooks = await getWebhooks();
+    const hook = hooks.find(h => h.id === req.params.id);
+    if (!hook) return res.status(404).json({ error: 'Webhook not found' });
+    const body = JSON.stringify({ event: 'test.ping', timestamp: new Date().toISOString(), source: 'salty-os', payload: { message: 'Test ping from Salty-OS' } });
+    const headers = { 'Content-Type': 'application/json' };
+    if (hook.secret) {
+      headers['x-salty-signature'] = `sha256=${crypto.createHmac('sha256', hook.secret).update(body).digest('hex')}`;
+    }
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(), 5000);
+    const resp = await fetch(hook.url, { method: 'POST', headers, body, signal: controller.signal });
+    res.json({ sent: true, status: resp.status });
+  } catch (err) {
+    res.json({ sent: false, error: err.message });
   }
 });
 
