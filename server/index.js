@@ -596,12 +596,22 @@ app.post('/api/skills/:name', (req, res) => {
         if (req.body.content !== undefined) {
           writeFileSync(newPath, req.body.content, 'utf-8');
         }
+        emitWebhook('skill.renamed', { oldName: filename, newName: newFilename, contentUpdated: req.body.content !== undefined });
+        logActivity('system', 'skill_renamed', `Skill renamed: ${filename} → ${newFilename}`, 'skills');
         return res.json({ name: newFilename, saved: true });
       }
     }
-    
+
     const filePath = join(SKILLS_DIR, filename);
+    const isNew = !existsSync(filePath);
     writeFileSync(filePath, req.body.content || '', 'utf-8');
+    if (isNew) {
+      emitWebhook('skill.created', { name: filename });
+      logActivity('system', 'skill_created', `Skill created: ${filename}`, 'skills');
+    } else {
+      emitWebhook('skill.updated', { name: filename });
+      logActivity('system', 'skill_updated', `Skill updated: ${filename}`, 'skills');
+    }
     res.json({ name: filename, saved: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -614,6 +624,8 @@ app.delete('/api/skills/:name', (req, res) => {
     const filePath = join(SKILLS_DIR, filename);
     if (!existsSync(filePath)) return res.status(404).json({ error: 'Skill not found' });
     unlinkSync(filePath);
+    emitWebhook('skill.deleted', { name: filename });
+    logActivity('system', 'skill_deleted', `Skill deleted: ${filename}`, 'skills');
     res.json({ deleted: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
