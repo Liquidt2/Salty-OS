@@ -267,7 +267,7 @@ let pool = new Pool({
 async function connectWithRetry(retries = 10, delay = 3000) {
   for (let host of DB_HOSTS) {
     console.log(`🔌 Trying database host: ${host}...`);
-    pool = new Pool({ ...pool.options, host });
+    pool = new Pool({ ...pool.options, host, password: process.env.DB_PASSWORD || "saltyos_secret" });
     for (let i = 0; i < 3; i++) { // Try each host 3 times
       try {
         const client = await pool.connect();
@@ -275,7 +275,7 @@ async function connectWithRetry(retries = 10, delay = 3000) {
         client.release();
         return true;
       } catch (err) {
-        console.log(`⏳ Waiting for PostgreSQL on ${host}... (${i + 1}/3)`);
+        console.log(`⏳ Waiting for PostgreSQL on ${host}... (${i + 1}/3) `);
         await new Promise(r => setTimeout(r, 1000));
       }
     }
