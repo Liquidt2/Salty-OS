@@ -293,7 +293,7 @@ function DashboardPage({ s, accent, kanban, crons, agents, services, a0Status, s
   const ql = [{ l: "Agents", i: I.agents, p: "agents", c: ACCENT.cyan }, { l: "Scheduler", i: I.scheduler, p: "scheduler", c: ACCENT.amber }, { l: "Deliverables", i: I.deliverables, p: "deliverables", c: ACCENT.green }, { l: "Kanban Board", i: I.kanban, p: "kanban", c: ACCENT.purple }];
   const svcList = services ? Object.entries(services).map(([name, info]) => ({ name, status: info.status || 'unknown', url: info.url || '' })) : [];
   return (<div>
-    <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 32 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif", letterSpacing: -0.5 }}>Command Center</h1><Badge text="Live" color={ACCENT.green} />{a0Status?.gitinfo && <Badge text={`A0 ${a0Status.gitinfo.short_tag}`} color={ACCENT.cyan} />}</div>
+    <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 32 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif", letterSpacing: -0.5 }}>Command Center</h1><Badge text="Live" color={ACCENT.green} /></div>
     <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 16, marginBottom: 28 }}>
       {stats.map((x, i) => (<Card key={i} color={x.c} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }}><div style={{ padding: "22px 22px 22px 24px" }}><div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}><div><div style={{ fontSize: 13, color: s.textMuted, fontWeight: 600, marginBottom: 6 }}>{x.l}</div><div style={{ fontSize: 36, fontWeight: 800, color: s.text, fontFamily: "'Space Grotesk', sans-serif", letterSpacing: -1 }}>{x.v}</div></div><div style={{ color: x.c, opacity: 0.6 }}>{x.i}</div></div></div></Card>))}
     </div>
@@ -468,10 +468,10 @@ function AgentsPage({ s, accent, agents, setAgents, a0Agents }) {
     </div>
 
     {loading ? <div style={{ textAlign: 'center', padding: 60, color: s.textMuted }}>Loading agent profiles...</div> : (
-    <div style={{ display: 'grid', gridTemplateColumns: sel ? '340px 1fr' : 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16, transition: 'all 0.3s' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: sel ? '300px 1fr' : 'repeat(auto-fill, minmax(280px, 1fr))', gap: 16, transition: 'all 0.3s', ...(sel ? { height: 'calc(100vh - 180px)', overflow: 'hidden' } : {}) }}>
 
       {/* Left: Agent profile cards */}
-      <div style={{ display: 'flex', flexDirection: sel ? 'column' : 'row', flexWrap: sel ? 'nowrap' : 'wrap', gap: 12, ...(sel ? { maxHeight: 'calc(100vh - 200px)', overflowY: 'auto' } : {}) }}>
+      <div style={{ display: 'flex', flexDirection: sel ? 'column' : 'row', flexWrap: sel ? 'nowrap' : 'wrap', gap: 12, ...(sel ? { overflowY: 'auto' } : {}) }}>
         {a0Profiles.map(p => (
           <Card key={p.key} color={sel?.key === p.key ? ACCENT.cyan : (isBuiltIn(p.key) ? ACCENT.purple : ACCENT.green)}
             style={{ background: sel?.key === p.key ? ACCENT.cyan + '08' : s.bgCard, border: `1px solid ${sel?.key === p.key ? ACCENT.cyan + '40' : s.border}`, boxShadow: s.shadow, ...(sel ? {} : { minWidth: 280 }) }}
@@ -497,7 +497,7 @@ function AgentsPage({ s, accent, agents, setAgents, a0Agents }) {
 
       {/* Right: Detail panel when selected */}
       {sel && (
-        <div style={{ background: s.bgCard, borderRadius: 20, border: `1px solid ${s.border}`, overflow: 'hidden', display: 'flex', flexDirection: 'column', maxHeight: 'calc(100vh - 200px)' }}>
+        <div style={{ background: s.bgCard, borderRadius: 20, border: `1px solid ${s.border}`, overflow: 'hidden', display: 'flex', flexDirection: 'column', height: '100%' }}>
           {/* Header */}
           <div style={{ padding: '18px 24px', borderBottom: `1px solid ${s.border}`, display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={{ flex: 1 }}>
@@ -570,7 +570,7 @@ function AgentsPage({ s, accent, agents, setAgents, a0Agents }) {
   </div>);
 }
 
-// ─── SCHEDULER (OpenClaw Style) ───
+// ─── SCHEDULER ───
 function SchedulerPage({ s, accent }) {
   const [tasks, setTasks] = useState([]);
   const [modal, setModal] = useState(false);
@@ -578,29 +578,34 @@ function SchedulerPage({ s, accent }) {
   const [viewTask, setViewTask] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const empty = { name: "", type: "scheduled", system_prompt: "", prompt: "", project_name: null, project_color: null, schedule: { minute: "0", hour: "*", day: "*", month: "*", weekday: "*", timezone: "America/Chicago" } };
+  const empty = { name: "", type: "scheduled", description: "", project: "", agent: "", state: "idle", minute: "0", hour: "*", day: "*", month: "*", weekday: "*" };
   const [form, setForm] = useState(empty);
   const typeOpts = [{ value: "scheduled", label: "Scheduled (Cron)" }, { value: "manual", label: "Manual Trigger" }];
-  const tzOpts = [{ value: "America/Chicago", label: "CST (America/Chicago)" }, { value: "America/New_York", label: "EST (America/New_York)" }, { value: "America/Los_Angeles", label: "PST (America/Los_Angeles)" }, { value: "UTC", label: "UTC" }];
+  const stateOpts = [{ value: "idle", label: "Idle" }, { value: "running", label: "Running" }, { value: "disabled", label: "Disabled" }];
 
-  const loadTasks = async () => { try { const r = await api('/a0/scheduler'); if (Array.isArray(r)) setTasks(r); } catch {} setLoading(false); };
+  const loadTasks = async () => {
+    const r = await api('/crons');
+    if (Array.isArray(r)) setTasks(r);
+    setLoading(false);
+  };
   useEffect(() => { loadTasks(); }, []);
 
-  const fmtDate = (d) => { if (!d) return '—'; try { return new Date(d).toLocaleString('en-US', { timeZone: 'America/Chicago', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch { return d; } };
-  const cronStr = (sch) => sch ? `${sch.minute} ${sch.hour} ${sch.day} ${sch.month} ${sch.weekday}` : '* * * * *';
+  const fmtDate = (d) => { if (!d) return '—'; try { return new Date(d).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }); } catch { return d; } };
+  const cronStr = (t) => `${t.minute||'*'} ${t.hour||'*'} ${t.day||'*'} ${t.month||'*'} ${t.weekday||'*'}`;
 
-  const Fields = ({ data, setData }) => {
-    const sch = data.schedule || {};
-    const setSch = (k, v) => setData({ ...data, schedule: { ...sch, [k]: v } });
-    return (<>
-      <Inp label="Task Name" hint="Unique identifier (slug-style)" value={data.name} onChange={e => setData({ ...data, name: e.target.value })} s={s} placeholder="e.g. daily-bible-sms-cst" />
-      <Sel label="Type" hint="Task execution method" value={data.type} onChange={e => setData({ ...data, type: e.target.value })} s={s} options={typeOpts} />
-      <Inp label="System Prompt" hint="Agent persona / role instructions" value={data.system_prompt} onChange={e => setData({ ...data, system_prompt: e.target.value })} s={s} multiline placeholder="Agent role and capabilities..." />
-      <Inp label="Prompt" hint="Step-by-step execution instructions" value={data.prompt} onChange={e => setData({ ...data, prompt: e.target.value })} s={s} multiline placeholder="1. First step&#10;2. Second step..." />
-      <Sel label="Timezone" value={sch.timezone || 'America/Chicago'} onChange={e => setSch('timezone', e.target.value)} s={s} options={tzOpts} />
-      <CronFields minute={sch.minute || '*'} hour={sch.hour || '*'} day={sch.day || '*'} month={sch.month || '*'} weekday={sch.weekday || '*'} onChange={(k, v) => setSch(k, v)} s={s} />
-    </>);
-  };
+  const Fields = ({ data, setData }) => (<>
+    <Inp label="Task Name" value={data.name} onChange={e => setData({ ...data, name: e.target.value })} s={s} placeholder="e.g. daily-prospect-scrape" />
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <Sel label="Type" value={data.type} onChange={e => setData({ ...data, type: e.target.value })} s={s} options={typeOpts} />
+      <Sel label="State" value={data.state || 'idle'} onChange={e => setData({ ...data, state: e.target.value })} s={s} options={stateOpts} />
+    </div>
+    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+      <Inp label="Project" value={data.project || ''} onChange={e => setData({ ...data, project: e.target.value })} s={s} placeholder="Project name" />
+      <Inp label="Agent" value={data.agent || ''} onChange={e => setData({ ...data, agent: e.target.value })} s={s} placeholder="e.g. nova" />
+    </div>
+    <Inp label="Description" value={data.description || ''} onChange={e => setData({ ...data, description: e.target.value })} s={s} multiline placeholder="What does this task do..." />
+    <CronFields minute={data.minute || '*'} hour={data.hour || '*'} day={data.day || '*'} month={data.month || '*'} weekday={data.weekday || '*'} onChange={(k, v) => setData({ ...data, [k]: v })} s={s} />
+  </>);
 
   return (<div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -610,33 +615,33 @@ function SchedulerPage({ s, accent }) {
         <Btn s={s} accent={accent} onClick={() => { setForm(empty); setModal(true); }}>{I.plus} Create Task</Btn>
       </div>
     </div>
-    <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 24 }}>Live from OpenClaw — <code style={{ color: ACCENT.cyan, fontFamily: "'JetBrains Mono'", fontSize: 12 }}>/a0/usr/scheduler/tasks.json</code> — {tasks.length} task{tasks.length !== 1 ? 's' : ''}</div>
+    <div style={{ fontSize: 13, color: s.textMuted, marginBottom: 24 }}>Synced from OpenClaw — {tasks.length} task{tasks.length !== 1 ? 's' : ''}</div>
 
     {loading ? <div style={{ color: s.textMuted, padding: 40, textAlign: "center" }}>Loading tasks...</div> :
-    tasks.length === 0 ? <div style={{ color: s.textMuted, padding: 40, textAlign: "center", background: s.bgCard, borderRadius: 16, border: `1px solid ${s.border}` }}>No scheduled tasks. Create one or add tasks in OpenClaw.</div> :
+    tasks.length === 0 ? <div style={{ color: s.textMuted, padding: 40, textAlign: "center", background: s.bgCard, borderRadius: 16, border: `1px solid ${s.border}` }}>No scheduled tasks. Create one or have OpenClaw sync tasks here.</div> :
     <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-      {tasks.map(t => (<Card key={t.uuid} color={STATE_COLORS[t.state] || ACCENT.cyan} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow, cursor: "pointer" }} onClick={() => setViewTask(t)}>
+      {tasks.map(t => (<Card key={t.id} color={STATE_COLORS[t.state] || ACCENT.cyan} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow, cursor: "pointer" }} onClick={() => setViewTask(t)}>
         <div style={{ padding: "18px 20px 18px 22px", display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
           <StatusDot status={t.state === "idle" ? "active" : t.state === "running" ? "active" : "inactive"} />
           <div style={{ flex: 1, minWidth: 180 }}>
             <div style={{ fontSize: 15, fontWeight: 700, color: s.text }}>{t.name}</div>
-            <div style={{ fontSize: 12, color: s.textMuted, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 400 }}>{t.system_prompt ? t.system_prompt.slice(0, 80) + (t.system_prompt.length > 80 ? '...' : '') : 'No system prompt'}</div>
+            <div style={{ fontSize: 12, color: s.textMuted, marginTop: 2, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 400 }}>{t.description || 'No description'}</div>
           </div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
             <Badge text={t.state || 'idle'} color={STATE_COLORS[t.state] || ACCENT.cyan} />
             <Badge text={t.type || 'scheduled'} color={ACCENT.cyan} />
-            {t.schedule?.timezone && <Badge text={t.schedule.timezone.split('/')[1] || t.schedule.timezone} color={ACCENT.purple} />}
-            {t.project_name && <Badge text={t.project_name} color={ACCENT.amber} />}
+            {t.project && <Badge text={t.project} color={ACCENT.amber} />}
+            {t.agent && <Badge text={t.agent} color={ACCENT.purple} />}
           </div>
-          <code style={{ fontSize: 12, color: ACCENT.cyan, fontFamily: "'JetBrains Mono', monospace", background: accent + "10", padding: "4px 10px", borderRadius: 8, whiteSpace: "nowrap" }}>{cronStr(t.schedule)}</code>
+          <code style={{ fontSize: 12, color: ACCENT.cyan, fontFamily: "'JetBrains Mono', monospace", background: accent + "10", padding: "4px 10px", borderRadius: 8, whiteSpace: "nowrap" }}>{cronStr(t)}</code>
           <div style={{ fontSize: 11, color: s.textMuted, minWidth: 100 }}>
             <div>Last: {fmtDate(t.last_run)}</div>
             <div>Created: {fmtDate(t.created_at)}</div>
           </div>
           <div style={{ display: "flex", gap: 4 }} onClick={e => e.stopPropagation()}>
-            <button onClick={async () => { const ns = t.state === "disabled" ? "idle" : "disabled"; const r = await api(`/a0/scheduler/${t.uuid}`, { method: 'PUT', body: { state: ns } }); if (r && !r.error) loadTasks(); }} style={{ background: s.bgInput, border: "none", borderRadius: 10, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: t.state === "disabled" ? ACCENT.green : ACCENT.amber }}>{t.state === "disabled" ? "Enable" : "Disable"}</button>
+            <button onClick={async () => { const ns = t.state === "disabled" ? "idle" : "disabled"; await api(`/crons/${t.id}`, { method: 'PUT', body: { state: ns } }); loadTasks(); }} style={{ background: s.bgInput, border: "none", borderRadius: 10, padding: "6px 12px", cursor: "pointer", fontSize: 12, fontWeight: 600, color: t.state === "disabled" ? ACCENT.green : ACCENT.amber }}>{t.state === "disabled" ? "Enable" : "Disable"}</button>
             <button onClick={() => setEditTask({ ...t })} style={{ background: "none", border: "none", color: s.textMuted, cursor: "pointer", padding: 6 }}>{I.edit}</button>
-            <button onClick={async () => { await api(`/a0/scheduler/${t.uuid}`, { method: 'DELETE' }); loadTasks(); }} style={{ background: "none", border: "none", color: ACCENT.red, cursor: "pointer", padding: 6, opacity: 0.6 }}>{I.trash}</button>
+            <button onClick={async () => { await api(`/crons/${t.id}`, { method: 'DELETE' }); loadTasks(); }} style={{ background: "none", border: "none", color: ACCENT.red, cursor: "pointer", padding: 6, opacity: 0.6 }}>{I.trash}</button>
           </div>
         </div>
       </Card>))}
@@ -644,52 +649,41 @@ function SchedulerPage({ s, accent }) {
 
     {/* CREATE MODAL */}
     <Modal open={modal} onClose={() => setModal(false)} title="Create New Task" s={s} wide>
-      <div style={{ borderBottom: `1px solid ${s.border}`, marginBottom: 20 }} />
       <Fields data={form} setData={setForm} />
       <div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}>
         <Btn s={s} accent={accent} variant="ghost" onClick={() => setModal(false)}>Cancel</Btn>
-        <Btn s={s} accent={accent} onClick={async () => { await api('/a0/scheduler', { method: 'POST', body: form }); setModal(false); setForm(empty); loadTasks(); }}>Save</Btn>
+        <Btn s={s} accent={accent} onClick={async () => { await api('/crons', { method: 'POST', body: form }); setModal(false); setForm(empty); loadTasks(); }}>Save</Btn>
       </div>
     </Modal>
 
     {/* EDIT MODAL */}
     <Modal open={!!editTask} onClose={() => setEditTask(null)} title="Edit Task" s={s} wide>
       {editTask && (<>
-        <div style={{ borderBottom: `1px solid ${s.border}`, marginBottom: 20 }} />
         <Fields data={editTask} setData={setEditTask} />
         <div style={{ display: "flex", gap: 12, marginTop: 8, justifyContent: "flex-end" }}>
           <Btn s={s} accent={accent} variant="ghost" onClick={() => setEditTask(null)}>Cancel</Btn>
-          <Btn s={s} accent={accent} onClick={async () => { await api(`/a0/scheduler/${editTask.uuid}`, { method: 'PUT', body: { name: editTask.name, type: editTask.type, system_prompt: editTask.system_prompt, prompt: editTask.prompt, schedule: editTask.schedule, project_name: editTask.project_name } }); setEditTask(null); loadTasks(); }}>Save</Btn>
+          <Btn s={s} accent={accent} onClick={async () => { await api(`/crons/${editTask.id}`, { method: 'PUT', body: editTask }); setEditTask(null); loadTasks(); }}>Save</Btn>
         </div>
       </>)}
     </Modal>
 
-    {/* VIEW MODAL — full task detail with last_result */}
+    {/* VIEW MODAL */}
     <Modal open={!!viewTask && !editTask} onClose={() => setViewTask(null)} title={viewTask?.name || ""} s={s} wide>
       {viewTask && (<>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
           <Badge text={viewTask.state || 'idle'} color={STATE_COLORS[viewTask.state] || ACCENT.cyan} />
           <Badge text={viewTask.type || 'scheduled'} color={ACCENT.cyan} />
-          {viewTask.schedule?.timezone && <Badge text={viewTask.schedule.timezone} color={ACCENT.purple} />}
+          {viewTask.project && <Badge text={viewTask.project} color={ACCENT.amber} />}
+          {viewTask.agent && <Badge text={viewTask.agent} color={ACCENT.purple} />}
         </div>
-
-        {/* System Prompt */}
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>System Prompt</div>
-          <div style={{ padding: 14, background: s.bgInput, borderRadius: 12, fontSize: 13, color: s.text, lineHeight: 1.6, whiteSpace: "pre-wrap", maxHeight: 120, overflow: "auto" }}>{viewTask.system_prompt || '—'}</div>
-        </div>
-
-        {/* Prompt */}
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Prompt</div>
-          <div style={{ padding: 14, background: s.bgInput, borderRadius: 12, fontSize: 13, color: s.text, lineHeight: 1.6, whiteSpace: "pre-wrap", maxHeight: 200, overflow: "auto", fontFamily: "'JetBrains Mono', monospace", fontSize: 12 }}>{viewTask.prompt || '—'}</div>
-        </div>
-
-        {/* Schedule + Timestamps */}
+        {viewTask.description && (<div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Description</div>
+          <div style={{ padding: 14, background: s.bgInput, borderRadius: 12, fontSize: 13, color: s.text, lineHeight: 1.6 }}>{viewTask.description}</div>
+        </div>)}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 12, marginBottom: 16 }}>
           <div style={{ padding: 12, background: s.bgInput, borderRadius: 12 }}>
             <div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4 }}>Schedule</div>
-            <code style={{ fontSize: 14, color: ACCENT.cyan, fontFamily: "'JetBrains Mono'" }}>{cronStr(viewTask.schedule)}</code>
+            <code style={{ fontSize: 14, color: ACCENT.cyan, fontFamily: "'JetBrains Mono'" }}>{cronStr(viewTask)}</code>
           </div>
           <div style={{ padding: 12, background: s.bgInput, borderRadius: 12 }}>
             <div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4 }}>Last Run</div>
@@ -700,16 +694,9 @@ function SchedulerPage({ s, accent }) {
             <div style={{ fontSize: 13, color: s.text }}>{fmtDate(viewTask.created_at)}</div>
           </div>
         </div>
-
-        {/* Last Result */}
-        {viewTask.last_result && (<div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 11, color: s.textMuted, marginBottom: 4, fontWeight: 600, textTransform: "uppercase", letterSpacing: 1 }}>Last Result</div>
-          <div style={{ padding: 14, background: "#0a1a0a", borderRadius: 12, fontSize: 12, color: ACCENT.green, lineHeight: 1.7, whiteSpace: "pre-wrap", maxHeight: 300, overflow: "auto", fontFamily: "'JetBrains Mono', monospace", border: `1px solid ${ACCENT.green}30` }}>{viewTask.last_result}</div>
-        </div>)}
-
         <div style={{ display: "flex", gap: 12 }}>
           <Btn s={s} accent={accent} onClick={() => { setEditTask({ ...viewTask }); setViewTask(null); }}>{I.edit} Edit</Btn>
-          <Btn s={s} accent={accent} variant="danger" onClick={async () => { await api(`/a0/scheduler/${viewTask.uuid}`, { method: 'DELETE' }); setViewTask(null); loadTasks(); }}>{I.trash} Delete</Btn>
+          <Btn s={s} accent={accent} variant="danger" onClick={async () => { await api(`/crons/${viewTask.id}`, { method: 'DELETE' }); setViewTask(null); loadTasks(); }}>{I.trash} Delete</Btn>
         </div>
       </>)}
     </Modal>
@@ -717,24 +704,170 @@ function SchedulerPage({ s, accent }) {
 }
 
 function DeliverablesPage({ s, accent }) {
-  const [items, setItems] = useState([]); const [sel, setSel] = useState(null); const [filter, setFilter] = useState("all");
-  const ti = { pdf: "📄", image: "🖼️", doc: "📝", video: "🎬" };
-    useEffect(() => { (async () => { const d = await api("/deliverables"); const db = Array.isArray(d?.database) ? d.database : []; const fs = Array.isArray(d?.filesystem) ? d.filesystem : []; setItems([...db, ...fs]); })(); }, []);
+  const [items, setItems] = useState([]);
+  const [sel, setSel] = useState(null);
+  const [filter, setFilter] = useState("all");
+  const [uploading, setUploading] = useState(false);
+  const [renaming, setRenaming] = useState(null);
+  const [newTitle, setNewTitle] = useState("");
+  const fileRef = useRef();
 
-  const filtered = filter === "all" ? items : items.filter(i => i.type === filter);
+  const ti = { pdf: "📄", image: "🖼️", doc: "📝", video: "🎬", document: "📁" };
+  const typeColor = { pdf: ACCENT.red, image: ACCENT.green, doc: ACCENT.cyan, video: ACCENT.purple, document: ACCENT.amber };
+
+  const loadItems = async () => {
+    const d = await api("/deliverables");
+    const db = Array.isArray(d?.database) ? d.database : [];
+    const fs = Array.isArray(d?.filesystem) ? d.filesystem : [];
+    setItems([...db, ...fs.map(f => ({ ...f, _fs: true }))]);
+  };
+  useEffect(() => { loadItems(); }, []);
+
+  const handleUpload = (file) => {
+    if (!file) return;
+    setUploading(true);
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const res = await api('/deliverables', { method: 'POST', body: {
+        base64: e.target.result,
+        filename: file.name,
+        title: file.name.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' '),
+        mime_type: file.type || 'application/octet-stream',
+      }});
+      setUploading(false);
+      if (res?.id) { await loadItems(); }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleDelete = async (item) => {
+    if (!item.id || item._fs) return;
+    await api(`/deliverables/${item.id}`, { method: 'DELETE' });
+    setSel(null);
+    await loadItems();
+  };
+
+  const handleDownload = (item) => {
+    if (!item.id) return;
+    const base = window.location.hostname === 'localhost' ? 'http://localhost:3001/api' : '/api';
+    const token = localStorage.getItem('salty.token');
+    const url = `${base}/deliverables/${item.id}/download`;
+    const a = document.createElement('a');
+    a.href = url;
+    a.setAttribute('download', item.filename || item.name);
+    // Append token via fetch for authenticated download
+    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.blob())
+      .then(blob => {
+        const burl = URL.createObjectURL(blob);
+        a.href = burl;
+        a.click();
+        URL.revokeObjectURL(burl);
+      });
+  };
+
+  const handleRename = async () => {
+    if (!renaming || !newTitle.trim()) return;
+    await api(`/deliverables/${renaming.id}`, { method: 'PUT', body: { name: newTitle, title: newTitle } });
+    setRenaming(null);
+    setNewTitle("");
+    await loadItems();
+    if (sel?.id === renaming.id) setSel(prev => ({ ...prev, name: newTitle, title: newTitle }));
+  };
+
+  const fmtSize = (bytes) => {
+    if (!bytes) return '';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  };
+
+  const filtered = filter === "all" ? items : items.filter(i => (i.type || i.artifact_type) === filter);
+
   return (<div>
-    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 28, flexWrap: "wrap", gap: 12 }}><h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Deliverables</h1>
-      <div style={{ display: "flex", gap: 6 }}>{["all", "pdf", "image", "doc", "video"].map(f => (<button key={f} onClick={() => setFilter(f)} style={{ padding: "8px 16px", borderRadius: 12, border: `1px solid ${filter === f ? ACCENT.cyan + "40" : s.border}`, background: filter === f ? ACCENT.cyan + "15" : s.bgCard, color: filter === f ? ACCENT.cyan : s.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", textTransform: "capitalize", transition: "all 0.2s" }}>{f === "all" ? "All" : (ti[f] || "") + " " + f}</button>))}</div></div>
-    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 16 }}>
-      {filtered.map(item => (<Card key={item.id} color={item.color} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} onClick={() => setSel(item)}><div style={{ padding: "20px 20px 20px 22px" }}><div style={{ fontSize: 36, marginBottom: 12 }}>{ti[item.type]}</div><div style={{ fontSize: 15, fontWeight: 700, color: s.text, marginBottom: 6 }}>{item.name}</div><div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}><Badge text={item.type} color={item.color} /><span style={{ fontSize: 11, color: s.textMuted }}>{item.size}</span></div><div style={{ fontSize: 12, color: s.textMuted }}>By {item.agent} · {item.created}</div></div></Card>))}
+    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
+      <h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Deliverables</h1>
+      <div style={{ display: "flex", gap: 8 }}>
+        <Btn s={s} accent={accent} variant="ghost" onClick={loadItems}>{I.refresh} Refresh</Btn>
+        <Btn s={s} accent={accent} variant="ghost" onClick={async () => { await api('/deliverables/ingest-local', { method: 'POST' }); loadItems(); }}>Ingest Files</Btn>
+        <Btn s={s} accent={accent} onClick={() => fileRef.current.click()} disabled={uploading}>{uploading ? "Uploading..." : <>{I.upload} Upload</>}</Btn>
+        <input ref={fileRef} type="file" style={{ display: "none" }} onChange={e => handleUpload(e.target.files[0])} />
+      </div>
     </div>
-    <Modal open={!!sel} onClose={() => setSel(null)} title={sel?.name || ""} s={s}>{sel && (<>
-      <div style={{ textAlign: "center", fontSize: 64, marginBottom: 16 }}>{ti[sel.type]}</div>
-      <div style={{ display: "flex", gap: 8, justifyContent: "center", marginBottom: 16, flexWrap: "wrap" }}><Badge text={sel.type} color={sel.color} /><Badge text={sel.size} color={s.textMuted} /><Badge text={sel.agent} color={ACCENT.purple} /></div>
-      <div style={{ textAlign: "center", fontSize: 13, color: s.textMuted, marginBottom: 20 }}>Created: {sel.created}</div>
-      <div style={{ background: s.bgInput, borderRadius: 16, padding: 40, textAlign: "center", marginBottom: 20, border: `1px dashed ${s.border}` }}><div style={{ fontSize: 14, color: s.textMuted }}>Preview area — connects to file system in production</div></div>
-      <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}><Btn s={s}>{I.eye} View</Btn><Btn s={s} accent={accent} variant="ghost">{I.download} Download</Btn><Btn s={s} accent={accent} variant="ghost">{I.edit} Rename</Btn><Btn s={s} accent={accent} variant="danger" onClick={() => { setItems(items.filter(i => i.id !== sel.id)); setSel(null); }}>{I.trash} Delete</Btn></div>
+    <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
+      {["all", "pdf", "image", "doc", "video", "document"].map(f => (
+        <button key={f} onClick={() => setFilter(f)} style={{ padding: "8px 16px", borderRadius: 12, border: `1px solid ${filter === f ? ACCENT.cyan + "40" : s.border}`, background: filter === f ? ACCENT.cyan + "15" : s.bgCard, color: filter === f ? ACCENT.cyan : s.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", textTransform: "capitalize", transition: "all 0.2s" }}>
+          {f === "all" ? "All Files" : (ti[f] || "") + " " + f}
+        </button>
+      ))}
+    </div>
+    {filtered.length === 0 ? (
+      <div onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); handleUpload(e.dataTransfer.files[0]); }}
+        style={{ padding: 60, textAlign: "center", background: s.bgCard, borderRadius: 20, border: `2px dashed ${s.border}`, color: s.textMuted }}>
+        <div style={{ fontSize: 40, marginBottom: 16 }}>📭</div>
+        <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 8 }}>No deliverables yet</div>
+        <div style={{ fontSize: 13, marginBottom: 20 }}>Upload files or have OpenClaw push artifacts here. Drag & drop to upload.</div>
+        <Btn s={s} accent={accent} onClick={() => fileRef.current.click()}>{I.upload} Upload First File</Btn>
+      </div>
+    ) : (
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 16 }}>
+        {filtered.map((item, idx) => {
+          const t = item.type || item.artifact_type || 'document';
+          const col = typeColor[t] || ACCENT.amber;
+          return (<Card key={item.id || idx} color={col} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} onClick={() => setSel(item)}>
+            <div style={{ padding: "20px 20px 20px 22px" }}>
+              <div style={{ fontSize: 36, marginBottom: 10 }}>{ti[t] || "📁"}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: s.text, marginBottom: 6, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item.title || item.name}</div>
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 6, flexWrap: "wrap" }}>
+                <Badge text={t} color={col} />
+                {item.size_bytes ? <span style={{ fontSize: 11, color: s.textMuted }}>{fmtSize(item.size_bytes)}</span> : null}
+                {item._fs && <Badge text="unregistered" color={ACCENT.amber} />}
+              </div>
+              <div style={{ fontSize: 11, color: s.textMuted }}>
+                {item.agent && <>By {item.agent} · </>}
+                {item.created_at ? new Date(item.created_at).toLocaleDateString() : ''}
+              </div>
+            </div>
+          </Card>);
+        })}
+      </div>
+    )}
+
+    {/* Detail modal */}
+    <Modal open={!!sel} onClose={() => setSel(null)} title={sel?.title || sel?.name || ""} s={s} wide>{sel && (<>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+        <Badge text={sel.type || sel.artifact_type || 'document'} color={typeColor[sel.type] || ACCENT.amber} />
+        {sel.size_bytes ? <Badge text={fmtSize(sel.size_bytes)} color={s.textMuted} /> : null}
+        {sel.agent && <Badge text={sel.agent} color={ACCENT.purple} />}
+        {sel.project && <Badge text={sel.project} color={ACCENT.cyan} />}
+        {sel.status && <Badge text={sel.status} color={ACCENT.green} />}
+      </div>
+      {sel.source_agent && <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 8 }}>Source: {sel.source_agent}{sel.source_task_id ? ` · Task: ${sel.source_task_id}` : ''}</div>}
+      {sel.tags?.length > 0 && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>{sel.tags.map(tag => <Badge key={tag} text={tag} color={ACCENT.cyan} />)}</div>}
+      <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 20 }}>Uploaded: {sel.created_at ? new Date(sel.created_at).toLocaleString() : '—'}</div>
+
+      {/* Rename UI */}
+      {renaming?.id === sel.id ? (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
+          <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="New name..." style={{ flex: 1, padding: "10px 14px", background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 12, color: s.text, fontSize: 13, outline: "none" }} />
+          <Btn s={s} accent={accent} onClick={handleRename}>Save</Btn>
+          <Btn s={s} accent={accent} variant="ghost" onClick={() => setRenaming(null)}>Cancel</Btn>
+        </div>
+      ) : null}
+
+      <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+        {!sel._fs && <Btn s={s} accent={accent} onClick={() => handleDownload(sel)}>{I.download} Download</Btn>}
+        {!sel._fs && <Btn s={s} accent={accent} variant="ghost" onClick={() => { setRenaming(sel); setNewTitle(sel.title || sel.name); }}>{I.edit} Rename</Btn>}
+        {!sel._fs && <Btn s={s} accent={accent} variant="danger" onClick={() => handleDelete(sel)}>{I.trash} Delete</Btn>}
+        {sel._fs && <div style={{ fontSize: 13, color: s.textMuted }}>Register via "Ingest Files" to enable download/delete.</div>}
+      </div>
     </>)}</Modal>
+
+    {/* Rename modal (standalone) */}
+    <Modal open={!!renaming && !sel} onClose={() => setRenaming(null)} title="Rename Deliverable" s={s}>
+      <Inp label="New Name" value={newTitle} onChange={e => setNewTitle(e.target.value)} s={s} />
+      <div style={{ display: "flex", gap: 12 }}><Btn s={s} accent={accent} onClick={handleRename}>Save</Btn><Btn s={s} variant="ghost" onClick={() => setRenaming(null)} s={s}>Cancel</Btn></div>
+    </Modal>
   </div>);
 }
 
@@ -1010,6 +1143,9 @@ function SettingsPage({ s, accent, settings, setSettings, kanban, crons, agents,
   const saveSettings = async () => {
     setSaveStatus("saving");
     await api('/settings', { method: 'POST', body: settings });
+    // Reload from DB to confirm persistence
+    const fresh = await api('/settings');
+    if (fresh && Object.keys(fresh).length > 0) setSettings(prev => ({ ...prev, ...fresh }));
     setSaveStatus("saved"); setTimeout(() => setSaveStatus(null), 2000);
   };
 
@@ -1130,7 +1266,7 @@ function SettingsPage({ s, accent, settings, setSettings, kanban, crons, agents,
         </div></Card>
 
       <Card color={ACCENT.amber} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>Appearance</div><Inp label="Accent Color" value={settings.accentColor} onChange={e => setSettings({ ...settings, accentColor: e.target.value })} s={s} /><div style={{ display: "flex", gap: 8, marginTop: 8 }}>{["#00E5FF", "#FFB300", "#B388FF", "#00E676", "#FF5252", "#FF80AB"].map(c => (<div key={c} onClick={() => setSettings({ ...settings, accentColor: c })} style={{ width: 36, height: 36, borderRadius: 10, background: c, cursor: "pointer", border: settings.accentColor === c ? `3px solid ${s.text}` : "3px solid transparent", transition: "all 0.2s" }} />))}</div></div></Card>
-      <Card color={ACCENT.green} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>API Connections</div><Inp label="OpenClaw URL" value={settings.agentZeroUrl} onChange={e => setSettings({ ...settings, agentZeroUrl: e.target.value })} s={s} placeholder="http://openclaw:5000" /><Inp label="n8n URL" value={settings.n8nUrl} onChange={e => setSettings({ ...settings, n8nUrl: e.target.value })} s={s} placeholder="http://n8n:5678" /><Inp label="Postiz URL" value={settings.postizUrl} onChange={e => setSettings({ ...settings, postizUrl: e.target.value })} s={s} placeholder="http://postiz:5000" /><Inp label="Firecrawl URL" value={settings.firecrawlUrl || ""} onChange={e => setSettings({ ...settings, firecrawlUrl: e.target.value })} s={s} placeholder="http://firecrawl:3002" /><Inp label="Gotenberg URL" value={settings.gotenbergUrl || ""} onChange={e => setSettings({ ...settings, gotenbergUrl: e.target.value })} s={s} placeholder="http://gotenberg:3000" /></div></Card>
+      <Card color={ACCENT.green} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}><div style={{ fontSize: 17, fontWeight: 700, color: s.text, marginBottom: 20 }}>API Connections</div><Inp label="OpenClaw URL" value={settings.agentZeroUrl || ""} onChange={e => setSettings({ ...settings, agentZeroUrl: e.target.value })} s={s} placeholder="http://openclaw:5000" /><Inp label="n8n URL" value={settings.n8nUrl || ""} onChange={e => setSettings({ ...settings, n8nUrl: e.target.value })} s={s} placeholder="http://n8n:5678" /><Inp label="Postiz URL" value={settings.postizUrl || ""} onChange={e => setSettings({ ...settings, postizUrl: e.target.value })} s={s} placeholder="http://postiz:5000" /><Inp label="Stirling-PDF URL" value={settings.stirlingUrl || ""} onChange={e => setSettings({ ...settings, stirlingUrl: e.target.value })} s={s} placeholder="http://stirling-pdf:8080" /></div></Card>
 
       {/* API Key */}
       <Card color={ACCENT.red} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} hoverable={false}><div style={{ padding: "24px 24px 24px 26px" }}>
@@ -1368,9 +1504,11 @@ function SkillsPage({ s, accent }) {
       </div>
 
       {/* Editor Main */}
-      <Card hoverable={false} style={{ flex: 1, background: s.bgCard, border: `1px solid ${s.border}`, display: "flex", flexDirection: "column" }}>
+      <div style={{ flex: 1, background: s.bgCard, border: `1px solid ${s.border}`, borderRadius: 20, display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }}>
+        {/* left accent bar */}
+        <div style={{ position: "absolute", left: 0, top: 0, bottom: 0, width: 5, background: ACCENT.cyan, borderRadius: "20px 0 0 20px", zIndex: 2 }} />
         {(selected || isEditing) ? (
-          <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: 24 }}>
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: 24, overflow: "hidden" }}>
             <div style={{ display: "flex", gap: 16, marginBottom: 16, alignItems: "center" }}>
               <div style={{ display: "flex", flexDirection: "column", flex: 1 }}>
                  <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 4 }}>Filename</div>
@@ -1387,13 +1525,12 @@ function SkillsPage({ s, accent }) {
                 )}
               </div>
             </div>
-            
             <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 4 }}>Markdown Content</div>
             <textarea
               value={content}
               onChange={e => setContent(e.target.value)}
               disabled={!isEditing}
-              style={{ flex: 1, padding: 20, background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 12, color: s.text, fontFamily: "'JetBrains Mono', monospace", fontSize: 13, resize: "none", outline: "none", lineHeight: 1.6 }}
+              style={{ flex: 1, padding: 20, background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 12, color: s.text, fontFamily: "'JetBrains Mono', monospace", fontSize: 13, resize: "none", outline: "none", lineHeight: 1.6, minHeight: 0 }}
             />
           </div>
         ) : (
@@ -1402,7 +1539,7 @@ function SkillsPage({ s, accent }) {
             Select a skill to view or edit
           </div>
         )}
-      </Card>
+      </div>
     </div>
   );
 }
@@ -1657,18 +1794,19 @@ function SaltyDashboard({ currentUser, onLogout }) {
   // ─── Load data from API on mount ───
   useEffect(() => {
     const load = async () => {
-      const [dbAgents, dbCrons, dbKanban, dbSettings, svc, a0Ag, a0Health, vInfo] = await Promise.all([
+      // Load core data + services — do NOT include a0 proxy calls here (they hang if OpenClaw is down)
+      const [dbAgents, dbCrons, dbKanban, dbSettings, svc, vInfo] = await Promise.all([
         api('/agents'), api('/crons'), api('/kanban'), api('/settings'),
-        api('/services'), a0('agents', { action: 'list' }), a0('health'), api('/version'),
+        api('/services'), api('/version'),
       ]);
-        if (dbAgents) setAgents(dbAgents);
-        if (dbCrons) setCrons(dbCrons);
+      if (dbAgents) setAgents(dbAgents);
+      if (dbCrons) setCrons(dbCrons);
       if (dbKanban) { const b = dbKanban.board || dbKanban; setKanban({ backlog: b.backlog || [], todo: b.todo || [], inProgress: b.inProgress || [], inReview: b.inReview || [], done: b.done || [] }); }
       if (dbSettings && Object.keys(dbSettings).length > 0) {
         setSettings(prev => ({ ...prev, ...dbSettings }));
       }
+      if (svc) setServices(svc);
       if (vInfo) setVersionInfo(vInfo);
-
       setLoaded(true);
     };
     load();

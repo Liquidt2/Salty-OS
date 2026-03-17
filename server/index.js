@@ -366,14 +366,25 @@ async function initDatabase() {
       CREATE TABLE IF NOT EXISTS deliverables (
         id TEXT PRIMARY KEY,
         name TEXT NOT NULL,
+        filename TEXT DEFAULT '',
+        title TEXT DEFAULT '',
         type TEXT DEFAULT 'document',
+        artifact_type TEXT DEFAULT 'document',
+        mime_type TEXT DEFAULT 'application/octet-stream',
         path TEXT DEFAULT '',
         url TEXT DEFAULT '',
         agent TEXT DEFAULT '',
         project TEXT DEFAULT '',
         size_bytes BIGINT DEFAULT 0,
+        sha256 TEXT DEFAULT '',
+        tags TEXT[] DEFAULT '{}',
+        source_agent TEXT DEFAULT '',
+        source_session_id TEXT DEFAULT '',
+        source_task_id TEXT DEFAULT '',
+        status TEXT DEFAULT 'final',
         metadata JSONB DEFAULT '{}',
-        created_at TIMESTAMPTZ DEFAULT NOW()
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
       );
 
       -- Settings (key-value store)
@@ -382,6 +393,43 @@ async function initDatabase() {
         value JSONB NOT NULL,
         updated_at TIMESTAMPTZ DEFAULT NOW()
       );
+
+      -- Deliverables migrations: add new columns if they don't exist yet
+      DO $$ BEGIN
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deliverables' AND column_name='filename') THEN
+          ALTER TABLE deliverables ADD COLUMN filename TEXT DEFAULT '';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deliverables' AND column_name='title') THEN
+          ALTER TABLE deliverables ADD COLUMN title TEXT DEFAULT '';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deliverables' AND column_name='artifact_type') THEN
+          ALTER TABLE deliverables ADD COLUMN artifact_type TEXT DEFAULT 'document';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deliverables' AND column_name='mime_type') THEN
+          ALTER TABLE deliverables ADD COLUMN mime_type TEXT DEFAULT 'application/octet-stream';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deliverables' AND column_name='sha256') THEN
+          ALTER TABLE deliverables ADD COLUMN sha256 TEXT DEFAULT '';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deliverables' AND column_name='tags') THEN
+          ALTER TABLE deliverables ADD COLUMN tags TEXT[] DEFAULT '{}';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deliverables' AND column_name='source_agent') THEN
+          ALTER TABLE deliverables ADD COLUMN source_agent TEXT DEFAULT '';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deliverables' AND column_name='source_session_id') THEN
+          ALTER TABLE deliverables ADD COLUMN source_session_id TEXT DEFAULT '';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deliverables' AND column_name='source_task_id') THEN
+          ALTER TABLE deliverables ADD COLUMN source_task_id TEXT DEFAULT '';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deliverables' AND column_name='status') THEN
+          ALTER TABLE deliverables ADD COLUMN status TEXT DEFAULT 'final';
+        END IF;
+        IF NOT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='deliverables' AND column_name='updated_at') THEN
+          ALTER TABLE deliverables ADD COLUMN updated_at TIMESTAMPTZ DEFAULT NOW();
+        END IF;
+      END $$;
 
       -- Create updated_at trigger function
       CREATE OR REPLACE FUNCTION update_updated_at()
@@ -721,16 +769,138 @@ app.post('/api/activity', async (req, res) => {
 app.get('/api/deliverables', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM deliverables ORDER BY created_at DESC');
-    // Also scan the shared volume for new files
-    const delivDir = process.env.DELIVERABLES_PATH || '/app/data/deliverables';
+    // Also scan the shared volume for unregistered files
     let files = [];
-    if (existsSync(delivDir)) {
-      files = readdirSync(delivDir).map(f => {
-        const stat = statSync(join(delivDir, f));
-        return { name: f, size_bytes: stat.size, created_at: stat.birthtime, path: join(delivDir, f) };
-      });
+    if (existsSync(DELIVERABLES_DIR)) {
+      const registeredPaths = new Set(rows.map(r => r.filename));
+      files = readdirSync(DELIVERABLES_DIR)
+        .filter(f => !registeredPaths.has(f))
+        .map(f => {
+          const stat = statSync(join(DELIVERABLES_DIR, f));
+          return { id: null, name: f, filename: f, size_bytes: stat.size, created_at: stat.birthtime, type: 'document', source: 'filesystem' };
+        });
     }
     res.json({ database: rows, filesystem: files });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/deliverables', async (req, res) => {
+  try {
+    const { base64, filename, title, type, agent, project, tags, source_agent, source_session_id, source_task_id, mime_type } = req.body;
+    if (!filename) return res.status(400).json({ error: 'filename required' });
+    const id = 'del_' + crypto.randomBytes(8).toString('hex');
+    const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const filePath = join(DELIVERABLES_DIR, `${id}_${sanitized}`);
+    let sizeBytes = 0;
+    let sha256 = null;
+    if (base64) {
+      const buf = Buffer.from(base64.includes(',') ? base64.split(',')[1] : base64, 'base64');
+      writeFileSync(filePath, buf);
+      sizeBytes = buf.length;
+      sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+    }
+    const displayName = title || filename.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
+    const ext = filename.split('.').pop().toLowerCase();
+    const artType = type || (['pdf'].includes(ext) ? 'pdf' : ['jpg','jpeg','png','gif','webp','svg'].includes(ext) ? 'image' : ['mp4','mov','avi','webm'].includes(ext) ? 'video' : ['doc','docx','txt','md'].includes(ext) ? 'doc' : 'document');
+    const { rows } = await pool.query(
+      `INSERT INTO deliverables (id, name, filename, title, type, artifact_type, mime_type, path, agent, project, size_bytes, sha256, tags, source_agent, source_session_id, source_task_id, status, metadata)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING *`,
+      [id, displayName, `${id}_${sanitized}`, displayName, artType, artType, mime_type||'application/octet-stream',
+       filePath, agent||source_agent||'', project||'', sizeBytes, sha256,
+       Array.isArray(tags) ? tags : [], source_agent||'', source_session_id||'', source_task_id||'',
+       'final', {}]
+    );
+    await logActivity(agent||'system', 'deliverable_created', `Deliverable uploaded: ${displayName}`, 'deliverables');
+    emitWebhook('deliverable.uploaded', rows[0]);
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/deliverables/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM deliverables WHERE id = $1', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/deliverables/:id/download', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM deliverables WHERE id = $1', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+    const filePath = rows[0].path || join(DELIVERABLES_DIR, rows[0].filename || rows[0].name);
+    if (!existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' });
+    res.download(filePath, rows[0].filename || rows[0].name);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.put('/api/deliverables/:id', async (req, res) => {
+  try {
+    const allowed = ['name','title','type','agent','project','tags','status','source_agent','source_session_id','source_task_id'];
+    const sets = [], vals = [];
+    let idx = 1;
+    for (const [key, val] of Object.entries(req.body)) {
+      if (allowed.includes(key)) { sets.push(`${key} = $${idx}`); vals.push(val); idx++; }
+    }
+    if (!sets.length) return res.status(400).json({ error: 'No valid fields to update' });
+    vals.push(req.params.id);
+    const { rows } = await pool.query(`UPDATE deliverables SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`, vals);
+    if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+    emitWebhook('deliverable.updated', rows[0]);
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.delete('/api/deliverables/:id', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM deliverables WHERE id = $1', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+    const filePath = rows[0].path || join(DELIVERABLES_DIR, rows[0].filename || rows[0].name);
+    try { if (existsSync(filePath)) unlinkSync(filePath); } catch {}
+    await pool.query('DELETE FROM deliverables WHERE id = $1', [req.params.id]);
+    await logActivity('system', 'deliverable_deleted', `Deliverable deleted: ${rows[0].name}`, 'deliverables');
+    emitWebhook('deliverable.deleted', { id: req.params.id });
+    res.json({ deleted: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Scan filesystem and register any untracked files into the DB
+app.post('/api/deliverables/ingest-local', async (req, res) => {
+  try {
+    if (!existsSync(DELIVERABLES_DIR)) return res.json({ ingested: 0 });
+    const { rows: existing } = await pool.query('SELECT filename FROM deliverables');
+    const registered = new Set(existing.map(r => r.filename));
+    const files = readdirSync(DELIVERABLES_DIR).filter(f => !registered.has(f));
+    let ingested = 0;
+    for (const f of files) {
+      const filePath = join(DELIVERABLES_DIR, f);
+      const stat = statSync(filePath);
+      if (!stat.isFile()) continue;
+      const id = 'del_' + crypto.randomBytes(8).toString('hex');
+      const ext = f.split('.').pop().toLowerCase();
+      const artType = ['pdf'].includes(ext) ? 'pdf' : ['jpg','jpeg','png','gif','webp','svg'].includes(ext) ? 'image' : ['mp4','mov','avi'].includes(ext) ? 'video' : ['doc','docx','txt','md'].includes(ext) ? 'doc' : 'document';
+      const displayName = f.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
+      try {
+        await pool.query(
+          `INSERT INTO deliverables (id, name, filename, title, type, artifact_type, mime_type, path, size_bytes, status, metadata) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+          [id, displayName, f, displayName, artType, artType, 'application/octet-stream', filePath, stat.size, 'final', {}]
+        );
+        ingested++;
+      } catch {}
+    }
+    res.json({ ingested, total: files.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1495,7 +1665,7 @@ app.get('/api/openclaw/export', (req, res) => {
 // ─── SERVICE PROXY — OpenClaw ───
 // ─── AGENT ZERO SESSION MANAGEMENT (Login + CSRF) ───
 const a0Session = { cookie: null, csrfToken: null, lastRefresh: 0 };
-const A0_URL = process.env.AGENT_ZERO_URL || 'http://agent-zero:80';
+const A0_URL = process.env.AGENT_ZERO_URL || process.env.OPENCLAW_URL || 'http://openclaw:5000';
 const A0_USER = process.env.A0_AUTH_LOGIN || 'admin';
 const A0_PASS = process.env.A0_AUTH_PASSWORD || 'admin';
 
@@ -1605,11 +1775,9 @@ app.all('/api/proxy/n8n/*', async (req, res) => {
 // ─── SERVICE STATUS ───
 app.get('/api/services', async (req, res) => {
   const services = {
-    'agent-zero': process.env.AGENT_ZERO_URL || 'http://agent-zero:80',
+    'openclaw': process.env.AGENT_ZERO_URL || process.env.OPENCLAW_URL || 'http://openclaw:5000',
     'n8n': process.env.N8N_URL || 'http://n8n:5678',
     'postiz': process.env.POSTIZ_URL || 'http://postiz:5000',
-    'gotenberg': process.env.GOTENBERG_URL || 'http://gotenberg:3100',
-    'firecrawl': process.env.FIRECRAWL_URL || 'http://firecrawl:3002',
     'stirling-pdf': process.env.STIRLING_URL || 'http://stirling-pdf:8080',
   };
   const results = {};
