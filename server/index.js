@@ -219,7 +219,29 @@ const authMiddleware = async (req, res, next) => {
   // 5. Require authentication
   res.status(401).json({ error: 'Authentication required' });
 };
+
+// ─── Health Check ───
+app.get('/api/health', async (req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({
+      status: 'healthy',
+      version: '1.0.0',
+      uptime: process.uptime(),
+      database: 'connected',
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(503).json({ status: 'unhealthy', database: 'disconnected', error: err.message });
+  }
+});
+
+
+
+
 app.use('/api', authMiddleware);
+
+// ─── KANBAN ───
 
 // ─── Webhook helpers ───
 async function getWebhooks() {
@@ -466,26 +488,6 @@ async function initDatabase() {
 // API ROUTES
 // ═══════════════════════════════════════════
 
-// ─── Health Check ───
-app.get('/api/health', async (req, res) => {
-  try {
-    await pool.query('SELECT 1');
-    res.json({
-      status: 'healthy',
-      version: '1.0.0',
-      uptime: process.uptime(),
-      database: 'connected',
-      timestamp: new Date().toISOString(),
-    });
-  } catch (err) {
-    res.status(503).json({ status: 'unhealthy', database: 'disconnected', error: err.message });
-  }
-});
-
-
-
-
-// ─── KANBAN ───
 app.get('/api/kanban', async (req, res) => {
   try {
     let rows = [];
