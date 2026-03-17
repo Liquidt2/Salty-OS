@@ -790,7 +790,7 @@ app.get('/api/deliverables', async (req, res) => {
 
 app.post('/api/deliverables', async (req, res) => {
   try {
-    const { base64, filename, title, type, agent, project, tags, source_agent, source_session_id, source_task_id, mime_type } = req.body;
+    const { base64, content, filename, title, type, agent, project, tags, source_agent, source_session_id, source_task_id, mime_type } = req.body;
     if (!filename) return res.status(400).json({ error: 'filename required' });
     const id = 'del_' + crypto.randomBytes(8).toString('hex');
     const sanitized = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
@@ -798,10 +798,20 @@ app.post('/api/deliverables', async (req, res) => {
     let sizeBytes = 0;
     let sha256 = null;
     if (base64) {
+      // Binary upload via base64 (browser file picker or OpenClaw artifact)
       const buf = Buffer.from(base64.includes(',') ? base64.split(',')[1] : base64, 'base64');
       writeFileSync(filePath, buf);
       sizeBytes = buf.length;
       sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+    } else if (content !== undefined && content !== null) {
+      // Plain text / markdown / CSV content upload
+      const buf = Buffer.from(String(content), 'utf-8');
+      writeFileSync(filePath, buf);
+      sizeBytes = buf.length;
+      sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+    } else {
+      // Metadata-only: create empty file as placeholder
+      writeFileSync(filePath, '');
     }
     const displayName = title || filename.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
     const ext = filename.split('.').pop().toLowerCase();
@@ -839,6 +849,23 @@ app.get('/api/deliverables/:id/download', async (req, res) => {
     const filePath = rows[0].path || join(DELIVERABLES_DIR, rows[0].filename || rows[0].name);
     if (!existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' });
     res.download(filePath, rows[0].filename || rows[0].name);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── DELIVERABLES PREVIEW (inline, authenticated) ───
+app.get('/api/deliverables/:id/preview', async (req, res) => {
+  try {
+    const { rows } = await pool.query('SELECT * FROM deliverables WHERE id = $1', [req.params.id]);
+    if (!rows[0]) return res.status(404).json({ error: 'Not found' });
+    const filePath = rows[0].path || join(DELIVERABLES_DIR, rows[0].filename || rows[0].name);
+    if (!existsSync(filePath)) return res.status(404).json({ error: 'File not found on disk' });
+    res.setHeader('Content-Disposition', 'inline');
+    if (rows[0].mime_type && rows[0].mime_type !== 'application/octet-stream') {
+      res.setHeader('Content-Type', rows[0].mime_type);
+    }
+    res.sendFile(filePath);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1776,20 +1803,43 @@ app.all('/api/proxy/n8n/*', async (req, res) => {
 
 // ─── SERVICE STATUS ───
 app.get('/api/services', async (req, res) => {
-  const services = {
-    'openclaw': process.env.AGENT_ZERO_URL || process.env.OPENCLAW_URL || 'http://openclaw:5000',
-    'n8n': process.env.N8N_URL || 'http://n8n:5678',
-    'postiz': process.env.POSTIZ_URL || 'http://postiz:5000',
-    'stirling-pdf': process.env.STIRLING_URL || 'http://stirling-pdf:8080',
+  // Read user-configured URLs from DB settings first, then fall back to env/defaults
+  let settingUrls = {};
+  try {
+    const { rows } = await pool.query(
+      "SELECT key, value FROM settings WHERE key IN ('agentZeroUrl','n8nUrl','postizUrl','stirlingUrl')"
+    );
+    rows.forEach(r => {
+      const raw = r.value;
+      settingUrls[r.key] = typeof raw === 'string' ? raw.replace(/^"|"$/g, '') : raw;
+    });
+  } catch {}
+
+  const serviceMap = {
+    'openclaw':     settingUrls.agentZeroUrl || process.env.AGENT_ZERO_URL || process.env.OPENCLAW_URL || 'http://openclaw:5000',
+    'n8n':          settingUrls.n8nUrl       || process.env.N8N_URL        || 'http://n8n:5678',
+    'postiz':       settingUrls.postizUrl    || process.env.POSTIZ_URL     || 'http://postiz:5000',
+    'stirling-pdf': settingUrls.stirlingUrl  || process.env.STIRLING_URL   || 'http://stirling-pdf:8080',
   };
+
+  // Per-service health check path (don't always ping root — some return 404 on /)
+  const healthPaths = {
+    'openclaw':     '/api/health',
+    'n8n':          '/healthz',
+    'postiz':       '/',
+    'stirling-pdf': '/',
+  };
+
   const results = {};
   await Promise.all(
-    Object.entries(services).map(async ([name, url]) => {
+    Object.entries(serviceMap).map(async ([name, url]) => {
+      if (!url) { results[name] = { status: 'unconfigured', url: '' }; return; }
+      const checkUrl = url.replace(/\/$/, '') + (healthPaths[name] || '/');
       try {
         const controller = new AbortController();
-        setTimeout(() => controller.abort(), 3000);
-        const resp = await fetch(`${url}/`, { signal: controller.signal });
-        results[name] = { status: 'online', code: resp.status, url };
+        setTimeout(() => controller.abort(), 5000);
+        const resp = await fetch(checkUrl, { signal: controller.signal });
+        results[name] = { status: resp.status < 500 ? 'online' : 'error', code: resp.status, url };
       } catch {
         results[name] = { status: 'offline', url };
       }

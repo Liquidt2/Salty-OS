@@ -155,10 +155,10 @@ function Card({ color = ACCENT.cyan, children, style = {}, onClick, hoverable = 
   </div>);
 }
 
-function Modal({ open, onClose, title, children, s, wide }) {
+function Modal({ open, onClose, title, children, s, wide, xwide }) {
   if (!open) return null;
   return (<div onClick={onClose} style={{ position: "fixed", inset: 0, background: s.bgModal, zIndex: 1000, display: "flex", alignItems: "center", justifyContent: "center", padding: 20, animation: "fadeIn 0.2s" }}>
-    <div onClick={e => e.stopPropagation()} style={{ background: s.bgCard, borderRadius: 24, padding: 32, width: "100%", maxWidth: wide ? 720 : 560, maxHeight: "85vh", overflow: "auto", border: `1px solid ${s.border}`, boxShadow: s.shadowHover, animation: "slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)" }}>
+    <div onClick={e => e.stopPropagation()} style={{ background: s.bgCard, borderRadius: 24, padding: 32, width: "100%", maxWidth: xwide ? 1100 : wide ? 720 : 560, maxHeight: "90vh", overflow: "auto", border: `1px solid ${s.border}`, boxShadow: s.shadowHover, animation: "slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1)" }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
         <h2 style={{ fontSize: 22, fontWeight: 700, color: s.text, margin: 0, fontFamily: "'DM Sans', sans-serif" }}>{title}</h2>
         <button onClick={onClose} style={{ background: s.bgInput, border: "none", borderRadius: 12, width: 36, height: 36, display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: s.textMuted }}>{I.x}</button>
@@ -712,8 +712,13 @@ function DeliverablesPage({ s, accent }) {
   const [newTitle, setNewTitle] = useState("");
   const fileRef = useRef();
 
-  const ti = { pdf: "📄", image: "🖼️", doc: "📝", video: "🎬", document: "📁" };
-  const typeColor = { pdf: ACCENT.red, image: ACCENT.green, doc: ACCENT.cyan, video: ACCENT.purple, document: ACCENT.amber };
+  // Inline viewer state
+  const [previewBlobUrl, setPreviewBlobUrl] = useState(null);
+  const [previewText, setPreviewText] = useState(null);
+  const [loadingPreview, setLoadingPreview] = useState(false);
+
+  const ti = { pdf: "📄", image: "🖼️", doc: "📝", video: "🎬", csv: "📊", markdown: "📝", document: "📁" };
+  const typeColor = { pdf: ACCENT.red, image: ACCENT.green, doc: ACCENT.cyan, csv: ACCENT.amber, markdown: ACCENT.cyan, video: ACCENT.purple, document: ACCENT.amber };
 
   const loadItems = async () => {
     const d = await api("/deliverables");
@@ -722,6 +727,39 @@ function DeliverablesPage({ s, accent }) {
     setItems([...db, ...fs.map(f => ({ ...f, _fs: true }))]);
   };
   useEffect(() => { loadItems(); }, []);
+
+  // ─── Load inline preview when a deliverable is selected ───
+  const loadPreview = async (item) => {
+    if (!item?.id || item._fs) { setPreviewBlobUrl(null); setPreviewText(null); return; }
+    setLoadingPreview(true);
+    setPreviewBlobUrl(null);
+    setPreviewText(null);
+    try {
+      const base = window.location.hostname === 'localhost' ? 'http://localhost:3001/api' : '/api';
+      const token = localStorage.getItem('salty.token');
+      const r = await fetch(`${base}/deliverables/${item.id}/download`, { headers: { Authorization: `Bearer ${token}` } });
+      if (!r.ok) { setLoadingPreview(false); return; }
+      const t = item.type || item.artifact_type || '';
+      const mime = item.mime_type || r.headers.get('content-type') || '';
+      const fname = (item.filename || item.name || '').toLowerCase();
+      if (t === 'image' || mime.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|svg)$/.test(fname)) {
+        setPreviewBlobUrl(URL.createObjectURL(await r.blob()));
+      } else if (t === 'pdf' || mime.includes('pdf') || fname.endsWith('.pdf')) {
+        setPreviewBlobUrl(URL.createObjectURL(await r.blob()));
+      } else if (t === 'video' || mime.startsWith('video/') || /\.(mp4|mov|avi|webm|mkv)$/.test(fname)) {
+        setPreviewBlobUrl(URL.createObjectURL(await r.blob()));
+      } else {
+        // Text-based: markdown, doc, csv, txt, json, etc.
+        setPreviewText(await r.text());
+      }
+    } catch { /* preview unavailable */ }
+    setLoadingPreview(false);
+  };
+
+  useEffect(() => {
+    if (sel?.id) loadPreview(sel);
+    else { setPreviewBlobUrl(prev => { if (prev) URL.revokeObjectURL(prev); return null; }); setPreviewText(null); }
+  }, [sel?.id]);
 
   const handleUpload = (file) => {
     if (!file) return;
@@ -751,17 +789,12 @@ function DeliverablesPage({ s, accent }) {
     if (!item.id) return;
     const base = window.location.hostname === 'localhost' ? 'http://localhost:3001/api' : '/api';
     const token = localStorage.getItem('salty.token');
-    const url = `${base}/deliverables/${item.id}/download`;
-    const a = document.createElement('a');
-    a.href = url;
-    a.setAttribute('download', item.filename || item.name);
-    // Append token via fetch for authenticated download
-    fetch(url, { headers: { Authorization: `Bearer ${token}` } })
+    fetch(`${base}/deliverables/${item.id}/download`, { headers: { Authorization: `Bearer ${token}` } })
       .then(r => r.blob())
       .then(blob => {
         const burl = URL.createObjectURL(blob);
-        a.href = burl;
-        a.click();
+        const a = document.createElement('a');
+        a.href = burl; a.download = item.filename || item.name; a.click();
         URL.revokeObjectURL(burl);
       });
   };
@@ -769,8 +802,7 @@ function DeliverablesPage({ s, accent }) {
   const handleRename = async () => {
     if (!renaming || !newTitle.trim()) return;
     await api(`/deliverables/${renaming.id}`, { method: 'PUT', body: { name: newTitle, title: newTitle } });
-    setRenaming(null);
-    setNewTitle("");
+    setRenaming(null); setNewTitle("");
     await loadItems();
     if (sel?.id === renaming.id) setSel(prev => ({ ...prev, name: newTitle, title: newTitle }));
   };
@@ -782,25 +814,51 @@ function DeliverablesPage({ s, accent }) {
     return (bytes / 1048576).toFixed(1) + ' MB';
   };
 
-  const filtered = filter === "all" ? items : items.filter(i => (i.type || i.artifact_type) === filter);
+  const guessType = (item) => item.type || item.artifact_type || 'document';
+
+  // ─── CSV table renderer ───
+  const CsvTable = ({ text }) => {
+    const rows = text.split('\n').filter(Boolean).slice(0, 200);
+    return (
+      <div style={{ overflowX: 'auto', overflowY: 'auto', maxHeight: 400, borderRadius: 12, border: `1px solid ${s.border}` }}>
+        <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 12 }}>
+          <tbody>{rows.map((row, ri) => (
+            <tr key={ri} style={{ borderBottom: `1px solid ${s.border}`, background: ri === 0 ? s.bgInput : 'transparent' }}>
+              {row.split(',').map((cell, ci) => (
+                <td key={ci} style={{ padding: '6px 10px', color: ri === 0 ? ACCENT.cyan : s.text, fontWeight: ri === 0 ? 700 : 400, borderRight: `1px solid ${s.border}`, whiteSpace: 'nowrap', fontFamily: ri === 0 ? 'inherit' : "'JetBrains Mono'" }}>
+                  {cell.trim().replace(/^"|"$/g, '')}
+                </td>
+              ))}
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    );
+  };
+
+  const filtered = filter === "all" ? items : items.filter(i => guessType(i) === filter);
 
   return (<div>
     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20, flexWrap: "wrap", gap: 12 }}>
       <h1 style={{ fontSize: 28, fontWeight: 800, color: s.text, margin: 0, fontFamily: "'Space Grotesk', sans-serif" }}>Deliverables</h1>
-      <div style={{ display: "flex", gap: 8 }}>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
         <Btn s={s} accent={accent} variant="ghost" onClick={loadItems}>{I.refresh} Refresh</Btn>
         <Btn s={s} accent={accent} variant="ghost" onClick={async () => { await api('/deliverables/ingest-local', { method: 'POST' }); loadItems(); }}>Ingest Files</Btn>
         <Btn s={s} accent={accent} onClick={() => fileRef.current.click()} disabled={uploading}>{uploading ? "Uploading..." : <>{I.upload} Upload</>}</Btn>
-        <input ref={fileRef} type="file" style={{ display: "none" }} onChange={e => handleUpload(e.target.files[0])} />
+        <input ref={fileRef} type="file" style={{ display: "none" }} accept="*/*" onChange={e => handleUpload(e.target.files[0])} multiple={false} />
       </div>
     </div>
+
+    {/* Filter tabs */}
     <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
-      {["all", "pdf", "image", "doc", "video", "document"].map(f => (
+      {["all", "pdf", "image", "doc", "video", "csv", "document"].map(f => (
         <button key={f} onClick={() => setFilter(f)} style={{ padding: "8px 16px", borderRadius: 12, border: `1px solid ${filter === f ? ACCENT.cyan + "40" : s.border}`, background: filter === f ? ACCENT.cyan + "15" : s.bgCard, color: filter === f ? ACCENT.cyan : s.textMuted, fontSize: 12, fontWeight: 600, cursor: "pointer", textTransform: "capitalize", transition: "all 0.2s" }}>
           {f === "all" ? "All Files" : (ti[f] || "") + " " + f}
         </button>
       ))}
     </div>
+
+    {/* Empty state / Drop zone */}
     {filtered.length === 0 ? (
       <div onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); handleUpload(e.dataTransfer.files[0]); }}
         style={{ padding: 60, textAlign: "center", background: s.bgCard, borderRadius: 20, border: `2px dashed ${s.border}`, color: s.textMuted }}>
@@ -810,9 +868,13 @@ function DeliverablesPage({ s, accent }) {
         <Btn s={s} accent={accent} onClick={() => fileRef.current.click()}>{I.upload} Upload First File</Btn>
       </div>
     ) : (
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 16 }}>
+      <div
+        onDragOver={e => e.preventDefault()}
+        onDrop={e => { e.preventDefault(); handleUpload(e.dataTransfer.files[0]); }}
+        style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))", gap: 16 }}
+      >
         {filtered.map((item, idx) => {
-          const t = item.type || item.artifact_type || 'document';
+          const t = guessType(item);
           const col = typeColor[t] || ACCENT.amber;
           return (<Card key={item.id || idx} color={col} style={{ background: s.bgCard, border: `1px solid ${s.border}`, boxShadow: s.shadow }} onClick={() => setSel(item)}>
             <div style={{ padding: "20px 20px 20px 22px" }}>
@@ -827,46 +889,108 @@ function DeliverablesPage({ s, accent }) {
                 {item.agent && <>By {item.agent} · </>}
                 {item.created_at ? new Date(item.created_at).toLocaleDateString() : ''}
               </div>
+              {/* Quick action row */}
+              <div style={{ display: "flex", gap: 6, marginTop: 12 }} onClick={e => e.stopPropagation()}>
+                {!item._fs && <button onClick={() => handleDownload(item)} title="Download" style={{ flex: 1, padding: "6px 10px", background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 8, color: s.textMuted, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>{I.download}</button>}
+                {!item._fs && <button onClick={() => { setRenaming(item); setNewTitle(item.title || item.name); }} title="Rename" style={{ flex: 1, padding: "6px 10px", background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 8, color: s.textMuted, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4 }}>{I.edit}</button>}
+                {!item._fs && <button onClick={async () => { if (confirm('Delete this deliverable?')) { await handleDelete(item); } }} title="Delete" style={{ flex: 1, padding: "6px 10px", background: s.bgInput, border: `1px solid ${ACCENT.red}20`, borderRadius: 8, color: ACCENT.red, cursor: "pointer", fontSize: 12, display: "flex", alignItems: "center", justifyContent: "center", gap: 4, opacity: 0.7 }}>{I.trash}</button>}
+              </div>
             </div>
           </Card>);
         })}
       </div>
     )}
 
-    {/* Detail modal */}
-    <Modal open={!!sel} onClose={() => setSel(null)} title={sel?.title || sel?.name || ""} s={s} wide>{sel && (<>
-      <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
-        <Badge text={sel.type || sel.artifact_type || 'document'} color={typeColor[sel.type] || ACCENT.amber} />
-        {sel.size_bytes ? <Badge text={fmtSize(sel.size_bytes)} color={s.textMuted} /> : null}
+    {/* ─── Detail / Viewer modal ─── */}
+    <Modal open={!!sel} onClose={() => setSel(null)} title={sel?.title || sel?.name || ""} s={s} xwide>{sel && (<>
+      {/* Metadata badges */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 12, flexWrap: "wrap" }}>
+        <Badge text={guessType(sel)} color={typeColor[guessType(sel)] || ACCENT.amber} />
+        {sel.size_bytes ? <Badge text={fmtSize(sel.size_bytes)} color={ACCENT.cyan} /> : null}
         {sel.agent && <Badge text={sel.agent} color={ACCENT.purple} />}
         {sel.project && <Badge text={sel.project} color={ACCENT.cyan} />}
         {sel.status && <Badge text={sel.status} color={ACCENT.green} />}
+        {sel.mime_type && sel.mime_type !== 'application/octet-stream' && <Badge text={sel.mime_type} color={s.textMuted} />}
       </div>
-      {sel.source_agent && <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 8 }}>Source: {sel.source_agent}{sel.source_task_id ? ` · Task: ${sel.source_task_id}` : ''}</div>}
-      {sel.tags?.length > 0 && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 12 }}>{sel.tags.map(tag => <Badge key={tag} text={tag} color={ACCENT.cyan} />)}</div>}
-      <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 20 }}>Uploaded: {sel.created_at ? new Date(sel.created_at).toLocaleString() : '—'}</div>
+      {sel.source_agent && <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 6 }}>Source: {sel.source_agent}{sel.source_task_id ? ` · Task: ${sel.source_task_id}` : ''}</div>}
+      {sel.tags?.length > 0 && <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 10 }}>{sel.tags.map(tag => <Badge key={tag} text={tag} color={ACCENT.cyan} />)}</div>}
+      <div style={{ fontSize: 12, color: s.textMuted, marginBottom: 16 }}>
+        {sel.filename && <span style={{ fontFamily: "'JetBrains Mono'", marginRight: 12 }}>{sel.filename}</span>}
+        Uploaded: {sel.created_at ? new Date(sel.created_at).toLocaleString() : '—'}
+      </div>
 
-      {/* Rename UI */}
-      {renaming?.id === sel.id ? (
-        <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
-          <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="New name..." style={{ flex: 1, padding: "10px 14px", background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 12, color: s.text, fontSize: 13, outline: "none" }} />
+      {/* ─── Inline Preview ─── */}
+      {loadingPreview && (
+        <div style={{ padding: 32, textAlign: 'center', color: s.textMuted, fontSize: 13, background: s.bgInput, borderRadius: 12, marginBottom: 16 }}>
+          Loading preview...
+        </div>
+      )}
+      {!loadingPreview && previewBlobUrl && (() => {
+        const t = guessType(sel);
+        const mime = sel.mime_type || '';
+        const fname = (sel.filename || sel.name || '').toLowerCase();
+        if (t === 'image' || mime.startsWith('image/') || /\.(png|jpg|jpeg|gif|webp|svg)$/.test(fname)) {
+          return (
+            <div style={{ marginBottom: 16, textAlign: 'center', background: s.bgInput, borderRadius: 12, padding: 12 }}>
+              <img src={previewBlobUrl} alt={sel.title} style={{ maxWidth: '100%', maxHeight: 500, borderRadius: 8, objectFit: 'contain' }} />
+            </div>
+          );
+        } else if (t === 'pdf' || mime.includes('pdf') || fname.endsWith('.pdf')) {
+          return (
+            <div style={{ marginBottom: 16 }}>
+              <embed src={previewBlobUrl} type="application/pdf" style={{ width: '100%', height: 550, borderRadius: 12, border: `1px solid ${s.border}` }} />
+            </div>
+          );
+        } else if (t === 'video' || mime.startsWith('video/') || /\.(mp4|mov|avi|webm|mkv)$/.test(fname)) {
+          return (
+            <div style={{ marginBottom: 16 }}>
+              <video src={previewBlobUrl} controls style={{ width: '100%', borderRadius: 12, background: '#000' }} />
+            </div>
+          );
+        }
+        return null;
+      })()}
+      {!loadingPreview && previewText !== null && (() => {
+        const fname = (sel?.filename || sel?.name || '').toLowerCase();
+        const isCSV = fname.endsWith('.csv') || guessType(sel) === 'csv';
+        return (
+          <div style={{ marginBottom: 16 }}>
+            {isCSV ? <CsvTable text={previewText} /> : (
+              <pre style={{ maxHeight: 420, overflow: 'auto', background: s.bgInput, padding: 16, borderRadius: 12, fontSize: 12, fontFamily: "'JetBrains Mono', monospace", color: s.text, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word', border: `1px solid ${s.border}` }}>
+                {previewText.slice(0, 50000)}
+              </pre>
+            )}
+          </div>
+        );
+      })()}
+      {!loadingPreview && !previewBlobUrl && previewText === null && !sel._fs && (
+        <div style={{ padding: 20, textAlign: 'center', color: s.textDim, fontSize: 13, background: s.bgInput, borderRadius: 12, marginBottom: 16 }}>
+          Preview not available for this file type
+        </div>
+      )}
+
+      {/* Rename inline */}
+      {renaming?.id === sel.id && (
+        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+          <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="New name..." style={{ flex: 1, padding: "10px 14px", background: s.bgInput, border: `1px solid ${s.border}`, borderRadius: 12, color: s.text, fontSize: 13, outline: "none" }} onKeyDown={e => e.key === 'Enter' && handleRename()} autoFocus />
           <Btn s={s} accent={accent} onClick={handleRename}>Save</Btn>
           <Btn s={s} accent={accent} variant="ghost" onClick={() => setRenaming(null)}>Cancel</Btn>
         </div>
-      ) : null}
+      )}
 
-      <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+      {/* Action buttons */}
+      <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         {!sel._fs && <Btn s={s} accent={accent} onClick={() => handleDownload(sel)}>{I.download} Download</Btn>}
         {!sel._fs && <Btn s={s} accent={accent} variant="ghost" onClick={() => { setRenaming(sel); setNewTitle(sel.title || sel.name); }}>{I.edit} Rename</Btn>}
         {!sel._fs && <Btn s={s} accent={accent} variant="danger" onClick={() => handleDelete(sel)}>{I.trash} Delete</Btn>}
-        {sel._fs && <div style={{ fontSize: 13, color: s.textMuted }}>Register via "Ingest Files" to enable download/delete.</div>}
+        {sel._fs && <div style={{ fontSize: 13, color: s.textMuted }}>Register via "Ingest Files" to enable full management.</div>}
       </div>
     </>)}</Modal>
 
-    {/* Rename modal (standalone) */}
+    {/* Standalone rename modal */}
     <Modal open={!!renaming && !sel} onClose={() => setRenaming(null)} title="Rename Deliverable" s={s}>
       <Inp label="New Name" value={newTitle} onChange={e => setNewTitle(e.target.value)} s={s} />
-      <div style={{ display: "flex", gap: 12 }}><Btn s={s} accent={accent} onClick={handleRename}>Save</Btn><Btn s={s} variant="ghost" onClick={() => setRenaming(null)} s={s}>Cancel</Btn></div>
+      <div style={{ display: "flex", gap: 12 }}><Btn s={s} accent={accent} onClick={handleRename}>Save</Btn><Btn s={s} accent={accent} variant="ghost" onClick={() => setRenaming(null)}>Cancel</Btn></div>
     </Modal>
   </div>);
 }
@@ -1783,7 +1907,7 @@ export default function SaltyOS() {
 function SaltyDashboard({ currentUser, onLogout }) {
   const [dark, setDark] = useState(true); const [page, setPage] = useState(() => { try { return localStorage.getItem("salty.page") || "dashboard"; } catch { return "dashboard"; } }); const [sidebarOpen, setSidebarOpen] = useState(true); const [time, setTime] = useState(new Date());
   const [kanban, setKanban] = useState({ backlog: [], todo: [], inProgress: [], inReview: [], done: [] }); const [agents, setAgents] = useState([]); const [crons, setCrons] = useState([]);
-  const [settings, setSettings] = useState({ companyName: "BKE Logistics", companyTitle: "Freight Brokerage Operations Hub", logoUrl: "", accentColor: ACCENT.cyan, kanbanColumns: ["Backlog", "To-Do", "In Progress", "In Review", "Done"], agentZeroUrl: "http://openclaw:5000", n8nUrl: "http://n8n:5678", postizUrl: "http://postiz:5000", firecrawlUrl: "http://firecrawl:3002", gotenbergUrl: "http://gotenberg:3000", githubRepo: "bke-logistics/salty-os", githubBranch: "main" });
+  const [settings, setSettings] = useState({ companyName: "BKE Logistics", companyTitle: "Freight Brokerage Operations Hub", logoUrl: "", accentColor: ACCENT.cyan, kanbanColumns: ["Backlog", "To-Do", "In Progress", "In Review", "Done"], agentZeroUrl: "https://klaus.bkelogistics.com", n8nUrl: "https://n8n.bkelogistics.com", postizUrl: "https://postiz.bkelogistics.com", stirlingUrl: "", githubRepo: "Liquidt2/Salty-OS", githubBranch: "main" });
   const [services, setServices] = useState({}); const [a0Agents, setA0Agents] = useState([]); const [a0Status, setA0Status] = useState(null); const [loaded, setLoaded] = useState(false);
   const [versionInfo, setVersionInfo] = useState(null);
 
@@ -1825,11 +1949,11 @@ function SaltyDashboard({ currentUser, onLogout }) {
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
     <style>{`@keyframes fadeIn{from{opacity:0}to{opacity:1}}@keyframes slideUp{from{opacity:0;transform:translateY(20px) scale(.97)}to{opacity:1;transform:translateY(0) scale(1)}}@keyframes pulse{0%,100%{opacity:.3;transform:scale(1)}50%{opacity:0;transform:scale(2)}}*{box-sizing:border-box}::-webkit-scrollbar{width:6px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:${s.border};border-radius:3px}::selection{background:${accent}30}`}</style>
     <aside style={{ width: sidebarOpen ? 240 : 72, background: s.bgSidebar, borderRight: `1px solid ${s.border}`, display: "flex", flexDirection: "column", transition: "width 0.4s cubic-bezier(0.16, 1, 0.3, 1)", overflow: "hidden", flexShrink: 0, zIndex: 10 }}>
-      <div style={{ padding: sidebarOpen ? "24px 20px" : "12px", borderBottom: `1px solid ${s.border}`, display: "flex", alignItems: "center", gap: 12, minHeight: 90 }}>
+      <div style={{ padding: sidebarOpen ? "20px 16px" : "10px", borderBottom: `1px solid ${s.border}`, display: "flex", alignItems: "center", gap: 12, minHeight: 120 }}>
         {settings.logoUrl ? (
-          <img src={settings.logoUrl.startsWith('http') ? settings.logoUrl : `${API.replace('/api','')}${settings.logoUrl}`} style={{ width: 56, height: 56, borderRadius: 14, objectFit: "contain", flexShrink: 0, padding: 2 }} alt="Logo" />
+          <img src={settings.logoUrl.startsWith('http') ? settings.logoUrl : `${API.replace('/api','')}${settings.logoUrl}`} style={{ width: 84, height: 84, borderRadius: 16, objectFit: "contain", flexShrink: 0, padding: 2 }} alt="Logo" />
         ) : (
-          <div style={{ width: 56, height: 56, borderRadius: 16, background: `linear-gradient(135deg, ${ACCENT.cyan}, ${ACCENT.cyanDark})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, fontWeight: 900, color: "#0a0e17", fontFamily: "'Space Grotesk'", flexShrink: 0, boxShadow: `0 4px 16px ${ACCENT.cyanGlow}` }}>S</div>
+          <div style={{ width: 84, height: 84, borderRadius: 20, background: `linear-gradient(135deg, ${ACCENT.cyan}, ${ACCENT.cyanDark})`, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36, fontWeight: 900, color: "#0a0e17", fontFamily: "'Space Grotesk'", flexShrink: 0, boxShadow: `0 4px 16px ${ACCENT.cyanGlow}` }}>S</div>
         )}
         {sidebarOpen && <div><div style={{ fontSize: 17, fontWeight: 800, color: s.text, fontFamily: "'Space Grotesk'", letterSpacing: -0.5 }}>{settings.companyName || "Salty OS"}</div><div style={{ fontSize: 10, color: s.textMuted, fontWeight: 600, letterSpacing: 1, textTransform: "uppercase" }}>{settings.companyTitle || "Source of Truth"}</div></div>}
       </div>
