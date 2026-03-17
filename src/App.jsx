@@ -18,13 +18,23 @@ const STATE_DESC = { idle: "Ready to run", running: "Currently executing", disab
 
 // ─── API Layer ───
 const API = window.location.hostname === 'localhost' ? 'http://localhost:3001/api' : '/api';
+function getAuthToken() { return localStorage.getItem('salty.token'); }
+function setAuthToken(t) { if (t) localStorage.setItem('salty.token', t); else localStorage.removeItem('salty.token'); }
 const api = async (path, opts = {}) => {
   try {
+    const token = getAuthToken();
+    const headers = { 'Content-Type': 'application/json', ...opts.headers };
+    if (token) headers['Authorization'] = `Bearer ${token}`;
     const res = await fetch(`${API}${path}`, {
-      headers: { 'Content-Type': 'application/json', ...opts.headers },
       ...opts,
+      headers,
       body: opts.body ? JSON.stringify(opts.body) : undefined,
     });
+    if (res.status === 401 && path !== '/auth/login' && path !== '/auth/register' && path !== '/auth/status') {
+      // Token expired or invalid — force re-login
+      setAuthToken(null);
+      window.dispatchEvent(new Event('salty-auth-expired'));
+    }
     if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
     return await res.json();
   } catch (err) {
@@ -1492,9 +1502,148 @@ function ChatPage({ s, accent }) {
 }
 
 // ═════════════════════════════════════════
+// LOGIN / REGISTER PAGE
+// ═════════════════════════════════════════
+function LoginPage({ onAuth, setupMode }) {
+  const [isRegister, setIsRegister] = useState(setupMode);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [displayName, setDisplayName] = useState("");
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const s = makeS(true);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError(""); setLoading(true);
+    const endpoint = isRegister ? '/auth/register' : '/auth/login';
+    const body = isRegister ? { email, password, displayName } : { email, password };
+    const res = await api(endpoint, { method: 'POST', body });
+    setLoading(false);
+    if (res?.token) {
+      setAuthToken(res.token);
+      onAuth(res);
+    } else {
+      setError(res?.error || "Authentication failed. Check your credentials.");
+    }
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "linear-gradient(135deg, #0a0e17 0%, #111827 50%, #0a0e17 100%)", fontFamily: "'DM Sans', sans-serif" }}>
+      <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
+      <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}@keyframes glow{0%,100%{box-shadow:0 0 30px rgba(0,229,255,0.1)}50%{box-shadow:0 0 60px rgba(0,229,255,0.2)}}input:-webkit-autofill{-webkit-box-shadow:0 0 0 50px #111827 inset!important;-webkit-text-fill-color:#e2e8f0!important}`}</style>
+      <div style={{ width: 420, animation: "fadeIn 0.6s ease-out", padding: 40, background: "rgba(17, 24, 39, 0.8)", backdropFilter: "blur(20px)", borderRadius: 24, border: "1px solid rgba(0, 229, 255, 0.15)", boxShadow: "0 25px 50px rgba(0, 0, 0, 0.5)" }}>
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <div style={{ width: 64, height: 64, borderRadius: 18, background: `linear-gradient(135deg, ${ACCENT.cyan}, ${ACCENT.cyanDark})`, display: "inline-flex", alignItems: "center", justifyContent: "center", fontSize: 28, fontWeight: 900, color: "#0a0e17", fontFamily: "'Space Grotesk'", marginBottom: 16, animation: "glow 3s infinite" }}>S</div>
+          <h1 style={{ fontSize: 26, fontWeight: 800, color: "#e2e8f0", margin: "0 0 6px 0", fontFamily: "'Space Grotesk'" }}>Salty OS</h1>
+          <p style={{ fontSize: 13, color: "#64748b", margin: 0 }}>{setupMode ? "Create your admin account to get started" : isRegister ? "Create a new account" : "Sign in to your dashboard"}</p>
+        </div>
+
+        <form onSubmit={handleSubmit}>
+          {isRegister && (
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#94a3b8", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>Display Name</label>
+              <input value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="Your name" style={{ width: "100%", padding: "12px 16px", background: "#1e293b", border: "1px solid #334155", borderRadius: 14, color: "#e2e8f0", fontSize: 14, outline: "none", fontFamily: "'DM Sans'", transition: "border 0.2s", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = ACCENT.cyan + "60"} onBlur={e => e.target.style.borderColor = "#334155"} />
+            </div>
+          )}
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#94a3b8", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>Email</label>
+            <input type="email" value={email} onChange={e => setEmail(e.target.value)} required placeholder="admin@company.com" style={{ width: "100%", padding: "12px 16px", background: "#1e293b", border: "1px solid #334155", borderRadius: 14, color: "#e2e8f0", fontSize: 14, outline: "none", fontFamily: "'DM Sans'", transition: "border 0.2s", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = ACCENT.cyan + "60"} onBlur={e => e.target.style.borderColor = "#334155"} />
+          </div>
+          <div style={{ marginBottom: 24 }}>
+            <label style={{ display: "block", fontSize: 12, fontWeight: 600, color: "#94a3b8", marginBottom: 6, textTransform: "uppercase", letterSpacing: 1 }}>Password</label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} required minLength={6} placeholder="••••••••" style={{ width: "100%", padding: "12px 16px", background: "#1e293b", border: "1px solid #334155", borderRadius: 14, color: "#e2e8f0", fontSize: 14, outline: "none", fontFamily: "'DM Sans'", transition: "border 0.2s", boxSizing: "border-box" }} onFocus={e => e.target.style.borderColor = ACCENT.cyan + "60"} onBlur={e => e.target.style.borderColor = "#334155"} />
+          </div>
+
+          {error && <div style={{ padding: "10px 16px", background: ACCENT.red + "15", border: `1px solid ${ACCENT.red}30`, borderRadius: 12, marginBottom: 16, fontSize: 13, color: ACCENT.red, fontWeight: 500 }}>{error}</div>}
+
+          <button type="submit" disabled={loading} style={{ width: "100%", padding: "14px 24px", borderRadius: 14, border: "none", background: `linear-gradient(135deg, ${ACCENT.cyan}, ${ACCENT.cyanDark})`, color: "#0a0e17", fontSize: 15, fontWeight: 800, fontFamily: "'Space Grotesk'", cursor: loading ? "wait" : "pointer", transition: "all 0.3s", opacity: loading ? 0.7 : 1, letterSpacing: 0.5 }}>
+            {loading ? "Please wait..." : isRegister ? "Create Account" : "Sign In"}
+          </button>
+        </form>
+
+        {!setupMode && (
+          <div style={{ textAlign: "center", marginTop: 20 }}>
+            <button onClick={() => { setIsRegister(!isRegister); setError(""); }} style={{ background: "none", border: "none", color: ACCENT.cyan, fontSize: 13, cursor: "pointer", fontFamily: "'DM Sans'", fontWeight: 600 }}>
+              {isRegister ? "Already have an account? Sign in" : "Need an account? Register"}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═════════════════════════════════════════
 // MAIN APP
 // ═════════════════════════════════════════
 export default function SaltyOS() {
+  // ─── Auth state ───
+  const [authState, setAuthState] = useState("checking"); // "checking" | "login" | "setup" | "authenticated"
+  const [currentUser, setCurrentUser] = useState(null);
+
+  useEffect(() => {
+    const checkAuth = async () => {
+      // Check if auth is required
+      const status = await api('/auth/status');
+      if (status?.setupRequired) {
+        setAuthState("setup");
+        return;
+      }
+      // If users exist, check for valid token
+      const token = getAuthToken();
+      if (token) {
+        const me = await api('/auth/me');
+        if (me?.id) {
+          setCurrentUser(me);
+          setAuthState("authenticated");
+          return;
+        }
+      }
+      // Auth is required but no valid token
+      if (status?.authEnabled) {
+        setAuthState("login");
+      } else {
+        // No users and no env token — open dev mode
+        setAuthState("authenticated");
+      }
+    };
+    checkAuth();
+
+    // Listen for auth expiry events
+    const onExpiry = () => { setAuthState("login"); setCurrentUser(null); };
+    window.addEventListener('salty-auth-expired', onExpiry);
+    return () => window.removeEventListener('salty-auth-expired', onExpiry);
+  }, []);
+
+  const handleAuth = (res) => {
+    setCurrentUser(res.user);
+    setAuthState("authenticated");
+  };
+
+  const handleLogout = () => {
+    setAuthToken(null);
+    setCurrentUser(null);
+    setAuthState("login");
+  };
+
+  if (authState === "checking") {
+    return (
+      <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "#0a0e17", color: ACCENT.cyan, fontFamily: "'DM Sans', sans-serif", fontSize: 16, fontWeight: 600 }}>
+        <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+        Loading Salty OS...
+      </div>
+    );
+  }
+
+  if (authState === "login" || authState === "setup") {
+    return <LoginPage onAuth={handleAuth} setupMode={authState === "setup"} />;
+  }
+
+  return <SaltyDashboard currentUser={currentUser} onLogout={handleLogout} />;
+}
+
+function SaltyDashboard({ currentUser, onLogout }) {
   const [dark, setDark] = useState(true); const [page, setPage] = useState(() => { try { return localStorage.getItem("salty.page") || "dashboard"; } catch { return "dashboard"; } }); const [sidebarOpen, setSidebarOpen] = useState(true); const [time, setTime] = useState(new Date());
   const [kanban, setKanban] = useState({ backlog: [], todo: [], inProgress: [], inReview: [], done: [] }); const [agents, setAgents] = useState([]); const [crons, setCrons] = useState([]);
   const [settings, setSettings] = useState({ companyName: "BKE Logistics", companyTitle: "Freight Brokerage Operations Hub", logoUrl: "", accentColor: ACCENT.cyan, kanbanColumns: ["Backlog", "To-Do", "In Progress", "In Review", "Done"], agentZeroUrl: "http://openclaw:5000", n8nUrl: "http://n8n:5678", postizUrl: "http://postiz:5000", firecrawlUrl: "http://firecrawl:3002", gotenbergUrl: "http://gotenberg:3000", githubRepo: "bke-logistics/salty-os", githubBranch: "main" });
@@ -1554,6 +1703,12 @@ export default function SaltyOS() {
         <button onClick={() => setSidebarOpen(!sidebarOpen)} style={{ background: "none", border: "none", color: s.textMuted, cursor: "pointer", padding: 4 }}>{I.menu}</button><div style={{ flex: 1 }} />
         <div style={{ textAlign: "right" }}><div style={{ fontSize: 18, fontWeight: 700, color: s.text, fontFamily: "'Space Grotesk'", letterSpacing: -0.5, fontVariantNumeric: "tabular-nums" }}>{time.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</div><div style={{ fontSize: 11, color: s.textMuted, fontWeight: 500 }}>{time.toLocaleDateString("en-US", { weekday: "long", month: "short", day: "numeric", year: "numeric" })}</div></div>
         <button onClick={() => setDark(!dark)} style={{ width: 40, height: 40, borderRadius: 14, background: s.bgInput, border: `1px solid ${s.border}`, color: dark ? ACCENT.amber : ACCENT.cyan, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", transition: "all 0.3s" }}>{dark ? I.sun : I.moon}</button>
+        {currentUser && <div style={{ display: "flex", alignItems: "center", gap: 10, marginLeft: 8 }}>
+          <span style={{ fontSize: 12, color: s.textMuted, fontWeight: 600 }}>{currentUser.display_name || currentUser.email}</span>
+          <button onClick={onLogout} title="Sign out" style={{ width: 36, height: 36, borderRadius: 12, background: s.bgInput, border: `1px solid ${s.border}`, color: ACCENT.red, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, transition: "all 0.3s" }}>
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+          </button>
+        </div>}
       </header>
       <div style={{ flex: 1, overflow: "auto", padding: 28 }} key={page}><div style={{ animation: "slideUp 0.4s cubic-bezier(0.16, 1, 0.3, 1)" }}>{renderPage()}</div></div>
     </main>

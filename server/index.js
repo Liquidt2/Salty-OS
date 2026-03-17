@@ -6,6 +6,8 @@
 import express from 'express';
 import pg from 'pg';
 import cors from 'cors';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, readdirSync, statSync, rmSync, unlinkSync, copyFileSync, renameSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
@@ -15,6 +17,8 @@ import crypto from 'crypto';
 const { Pool } = pg;
 const app = express();
 const PORT = process.env.API_PORT || 3001;
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+const JWT_EXPIRY = process.env.JWT_EXPIRY || '7d';
 
 // ─── Resolve repo root (works both locally and in Docker) ───
 const __filename = fileURLToPath(import.meta.url);
@@ -94,24 +98,126 @@ async function getStoredApiKeyHash() {
   return null;
 }
 
-// ─── Auth middleware — supports env token, API key header, and Bearer token ───
+// ─── Auth helpers ───
 const AUTH_TOKEN = process.env.SALTY_AUTH_TOKEN || '';
-const authMiddleware = async (req, res, next) => {
-  // 1. Env-based token (original)
-  if (AUTH_TOKEN) {
-    const token = req.headers['x-auth-token'] || req.query.token;
-    if (token === AUTH_TOKEN) return next();
+
+function verifyJwt(token) {
+  try { return jwt.verify(token, JWT_SECRET); } catch { return null; }
+}
+
+async function hasAnyUsers() {
+  try {
+    const { rows } = await pool.query('SELECT COUNT(*) as count FROM users');
+    return parseInt(rows[0].count) > 0;
+  } catch { return false; }
+}
+
+// ─── Auth routes (public — no middleware) ───
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    const { email, password, displayName } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+    if (password.length < 6) return res.status(400).json({ error: 'Password must be at least 6 characters' });
+
+    // Check if users already exist (only allow registration if no users yet, or if authenticated)
+    const usersExist = await hasAnyUsers();
+    if (usersExist) {
+      // Only allow new registrations from authenticated admins
+      const authHeader = req.headers.authorization;
+      if (!authHeader?.startsWith('Bearer ')) return res.status(403).json({ error: 'Registration closed. Contact an admin.' });
+      const decoded = verifyJwt(authHeader.slice(7));
+      if (!decoded) return res.status(403).json({ error: 'Registration closed. Contact an admin.' });
+    }
+
+    const hash = await bcrypt.hash(password, 12);
+    const { rows } = await pool.query(
+      'INSERT INTO users (email, password_hash, display_name) VALUES ($1, $2, $3) RETURNING id, email, display_name, role, created_at',
+      [email.toLowerCase().trim(), hash, displayName || email.split('@')[0]]
+    );
+    const user = rows[0];
+    const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    await logActivity(user.email, 'user_registered', `New user: ${user.email}`, 'auth', 'info');
+    res.json({ token, user });
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'Email already registered' });
+    res.status(500).json({ error: err.message });
   }
-  // 2. API Key (x-api-key header or Authorization: Bearer <key>)
-  const apiKey = req.headers['x-api-key'] || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.slice(7) : null);
+});
+
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password) return res.status(400).json({ error: 'Email and password required' });
+
+    const { rows } = await pool.query('SELECT * FROM users WHERE email = $1', [email.toLowerCase().trim()]);
+    if (rows.length === 0) return res.status(401).json({ error: 'Invalid email or password' });
+
+    const user = rows[0];
+    const valid = await bcrypt.compare(password, user.password_hash);
+    if (!valid) return res.status(401).json({ error: 'Invalid email or password' });
+
+    const token = jwt.sign({ userId: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: JWT_EXPIRY });
+    await logActivity(user.email, 'user_login', `Login: ${user.email}`, 'auth', 'info');
+    res.json({ token, user: { id: user.id, email: user.email, display_name: user.display_name, role: user.role } });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'No token' });
+    const decoded = verifyJwt(authHeader.slice(7));
+    if (!decoded) return res.status(401).json({ error: 'Invalid token' });
+    const { rows } = await pool.query('SELECT id, email, display_name, role, created_at FROM users WHERE id = $1', [decoded.userId]);
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/auth/status', async (req, res) => {
+  try {
+    const usersExist = await hasAnyUsers();
+    res.json({ authEnabled: usersExist, setupRequired: !usersExist });
+  } catch (err) {
+    res.json({ authEnabled: false, setupRequired: true });
+  }
+});
+
+// ─── Auth middleware — supports JWT, env token, API key, or open dev mode ───
+const authMiddleware = async (req, res, next) => {
+  // 1. JWT token (from login)
+  const authHeader = req.headers.authorization;
+  if (authHeader?.startsWith('Bearer ')) {
+    const token = authHeader.slice(7);
+    // Try JWT first
+    const decoded = verifyJwt(token);
+    if (decoded) { req.user = decoded; return next(); }
+    // Try API key
+    const storedHash = await getStoredApiKeyHash();
+    if (storedHash && hashApiKey(token) === storedHash) return next();
+    // Don't reject yet — might be dev mode
+  }
+  // 2. API Key via x-api-key header
+  const apiKey = req.headers['x-api-key'];
   if (apiKey) {
     const storedHash = await getStoredApiKeyHash();
     if (storedHash && hashApiKey(apiKey) === storedHash) return next();
     return res.status(401).json({ error: 'Invalid API key' });
   }
-  // 3. No auth configured = dev mode (open access)
-  if (!AUTH_TOKEN) return next();
-  res.status(401).json({ error: 'Unauthorized' });
+  // 3. Env-based token (legacy)
+  if (AUTH_TOKEN) {
+    const token = req.headers['x-auth-token'] || req.query.token;
+    if (token === AUTH_TOKEN) return next();
+  }
+  // 4. No users registered yet = setup mode (open access)
+  const usersExist = await hasAnyUsers();
+  if (!usersExist && !AUTH_TOKEN) return next();
+  // 5. Require authentication
+  res.status(401).json({ error: 'Authentication required' });
 };
 app.use('/api', authMiddleware);
 
@@ -183,6 +289,17 @@ async function initDatabase() {
   const client = await pool.connect();
   try {
     await client.query(`
+      -- Users (authentication)
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        display_name TEXT DEFAULT '',
+        role TEXT DEFAULT 'admin',
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+
       -- Kanban tasks
       CREATE TABLE IF NOT EXISTS kanban_tasks (
         id TEXT PRIMARY KEY,
@@ -476,6 +593,7 @@ app.put('/api/crons/:id', async (req, res) => {
     }
     vals.push(id);
     const { rows } = await pool.query(`UPDATE cron_tasks SET ${sets.join(', ')} WHERE id = $${idx} RETURNING *`, vals);
+    if (rows[0]) emitWebhook('cron.updated', rows[0]);
     res.json(rows[0] || { error: 'Not found' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -520,6 +638,7 @@ app.post('/api/agents', async (req, res) => {
        RETURNING *`,
       [agentId, name, role||'', department||'', status||'idle', avatar||'', color||'#00E5FF', doc||'', config||{}]
     );
+    emitWebhook(id ? 'agent.updated' : 'agent.created', rows[0]);
     res.json(rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
