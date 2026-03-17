@@ -226,7 +226,7 @@ app.get('/api/health', async (req, res) => {
     await pool.query('SELECT 1');
     res.json({
       status: 'healthy',
-      version: '1.0.0',
+      version: '2.4.0',
       uptime: process.uptime(),
       database: 'connected',
       timestamp: new Date().toISOString(),
@@ -1180,7 +1180,7 @@ app.get('/api/version', async (req, res) => {
     const pkg = JSON.parse(readFileSync(join(REPO_ROOT, 'server', 'package.json'), 'utf-8'));
     res.json({ version: pkg.version || '1.0.0', git, type: 'git' });
   } catch (err) {
-    res.json({ version: '1.0.0', error: err.message });
+    res.json({ version: '2.4.0', error: err.message });
   }
 });
 

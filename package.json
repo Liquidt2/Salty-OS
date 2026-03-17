@@ -1,7 +1,7 @@
 {
   "name": "salty-os",
-  "version": "1.0.0",
-  "description": "Salty OS — BKE Logistics × Agent Zero Command Center Dashboard",
+  "version": "2.4.0",
+  "description": "Salty OS — BKE Logistics × OpenClaw Command Center Dashboard",
   "private": true,
   "type": "module",
   "scripts": {
